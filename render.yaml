@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: gnslgbot
+    env: docker
+    plan: free
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      - key: RENDER
+        value: "true"
+      - key: DISABLE_PYAUDIO
+        value: "false"  # We handle PyAudio in Dockerfile now
+    autoDeploy: true
+    healthCheckPath: /
+    disk:
+      name: gnslgbot-data
+      mountPath: /app/temp_audio
+      sizeGB: 1
+    domains:
+      - gnslgbot.onrender.com
+    dockerfilePath: ./Dockerfile
+    dockerCommand: /app/entrypoint.sh

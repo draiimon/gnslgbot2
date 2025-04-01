@@ -1,0 +1,25 @@
+discord-py==2.5.2
+groq==0.18.0
+pynacl==1.5.0
+python-dotenv==1.0.1
+flask==3.0.0
+openai==1.69.0
+pytz==2025.2
+gtts==2.5.4
+pydub==0.25.1
+psycopg2-binary==2.9.10
+edge-tts==7.0.0
+# PyAudio installed separately in Dockerfile
+pocketsphinx==5.0.4
+speechrecognition==3.14.2
+pytube==15.0.0
+wavelink==3.4.1
+yt-dlp==2025.3.27
+spotipy==2.25.1
+firebase-admin==6.5.0
+dnspython==2.6.1
+requests==2.32.3
+google-auth==2.30.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+urllib3==2.2.2
