@@ -223,15 +223,12 @@ class ChatCog(commands.Cog):
             if after.display_name == new_name:
                 return
                 
-            # Track the last time we updated this member to prevent spamming updates
+            # No longer skipping updates based on time
+            # REALTIME updates as requested
             update_key = f"nickname_update_time_{after.id}"
             now = time.time()
             
-            # Skip if we've updated their nickname in the last 10 seconds
-            if update_key in self.user_message_timestamps and now - self.user_message_timestamps.get(update_key, 0) < 10:
-                # Skip too frequent updates to avoid spam
-                print(f"⏱️ Skipping rapid update for {after.name} - updated too recently")
-                return
+            # Always update nickname immediately with no time-based skipping
                 
             # Update the name (silently - no notifications)
             try:
