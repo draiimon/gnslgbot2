@@ -949,8 +949,7 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
                 model=Config.GROQ_MODEL,  # Using the model from config
                 messages=messages,
                 temperature=Config.TEMPERATURE,
-                max_tokens=Config.
-                MAX_TOKENS,  # Using standard max_tokens parameter
+                max_tokens=Config.MAX_TOKENS,  # Using standard max_tokens parameter
                 top_p=1,
                 stream=False)
 
@@ -1048,24 +1047,24 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
                 )
 
     @commands.command(name="clear")
-async def clear_history(self, ctx):
-    """Clear the conversation history for the current channel"""
-    # Clear from database if connected
-    if self.db and self.db.connected:
-        self.db.clear_conversation_history(ctx.channel.id)
-    
-    # Always clear from memory
-    self.conversation_history[ctx.channel.id].clear()
+    async def clear_history(self, ctx):
+        """Clear the conversation history for the current channel"""
+        # Clear from database if connected
+        if self.db and self.db.connected:
+            self.db.clear_conversation_history(ctx.channel.id)
+        
+        # Always clear from memory
+        self.conversation_history[ctx.channel.id].clear()
 
-    # Create polite embed for clearing history with blue left border (Discohook style)
-    clear_embed = discord.Embed(
-        title="**Conversation Cleared**",
-        description="Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.",
-        color=Config.EMBED_COLOR_INFO)
-    clear_embed.set_footer(
-        text="Ginsilog Bot | Fresh Start | Gawa ni Mason Calix")
+        # Create polite embed for clearing history with blue left border (Discohook style)
+        clear_embed = discord.Embed(
+            title="**Conversation Cleared**",
+            description="Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.",
+            color=Config.EMBED_COLOR_INFO)
+        clear_embed.set_footer(
+            text="Ginsilog Bot | Fresh Start | Gawa ni Mason Calix")
 
-    await ctx.send(embed=clear_embed)
+        await ctx.send(embed=clear_embed)
 
         # === VOICE CHANNEL COMMANDS ===
         # Voice commands moved to AudioCog to avoid duplicate commands
