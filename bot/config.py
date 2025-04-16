@@ -34,8 +34,6 @@ class Config:
     RATE_LIMIT_MESSAGES = 5  
     RATE_LIMIT_PERIOD = 60   
 
-    # Conversation memory
-    MAX_CONTEXT_MESSAGES = 10
 
     # Groq API settings
     GROQ_MODEL = "deepseek-r1-distill-llama-70b"  
@@ -58,58 +56,16 @@ class Config:
         'q': '𝐪', 'r': '𝐫', 's': '𝐬', 't': '𝐭', 'u': '𝐮', 'v': '𝐯', 'w': '𝐰', 'x': '𝐱', 
         'y': '𝐲', 'z': '𝐳', 
         '0': '𝟎', '1': '𝟏', '2': '𝟐', '3': '𝟑', '4': '𝟒', 
-        '5': '𝟓', '6': '𝟖', '7': '𝟕', '8': '𝟖', '9': '𝟗',
+        '5': '𝟓', '6': '𝟔', '7': '𝟕', '8': '𝟖', '9': '𝟗',
         ' ': ' ', '_': '_', '-': '-', '.': '.', ',': ',', '!': '!', '?': '?'
     }
 
-    # Role Emojis
-    ROLE_EMOJI_MAP = {
-        705770837399306332: "🌿",
-        1345727357662658603: "🌿",
-        1345727357645885448: "🍆",
-        1345727357645885449: "💦",
-        1348305679877935124: "🚀",
-        1345727357612195890: "🌸",
-        1345727357612195889: "💪",
-        1345727357612195887: "☁️",
-        1345727357645885446: "🍑",
-        1345727357612195885: "🛑",
-    }
-
-    ROLE_NAMES = {
-        705770837399306332: "Owner",
-        1345727357662658603: "𝐇𝐈𝐆𝐇",
-        1345727357645885448: "𝐊𝐄𝐊𝐋𝐀𝐑𝐒",
-        1345727357645885449: "𝐓𝐀𝐌𝐎𝐃𝐄𝐑𝐀𝐓𝐎𝐑",
-        1348305679877935124: "𝐀𝐒𝐀 𝐒𝐏𝐀𝐂𝐄𝐒𝐇𝐈𝐏",
-        1345727357612195890: "𝐕𝐀𝐕𝐀𝐈𝐇𝐀𝐍",
-        1345727357612195889: "𝐁𝐎𝐒𝐒𝐈𝐍𝐆",
-        1345727357612195887: "𝐁𝐖𝐈𝐒𝐈𝐓𝐀",
-        1345727357645885446: "𝐁𝐎𝐓 𝐒𝐈 𝐁𝐇𝐈𝐄",
-        1345727357612195885: "𝐁𝐎𝐁𝐎",
-    }
-
-    BOTS_TO_IGNORE = []
-
-    ADMIN_ROLE_IDS = [
-        1345727357662658603,
-        1345727357645885449,
-        1345727357645885448,
-    ]
-
-    EMBED_COLOR_PRIMARY = 0xFF5733
-    EMBED_COLOR_SUCCESS = 0x33FF57
-    EMBED_COLOR_ERROR = 0xFF3357
-    EMBED_COLOR_INFO = 0x3357FF
-
-    USE_DIRECT_STREAMING = True
-
-    # For animated role
-    ASA_SPACESHIP_ROLE_ID = 1348305679877935124
+    # Emoji Cycler settings
     EMOJI_SEQUENCE = ['🚀', '👽', '💥', '🛸', '🌌', '✨']
+    ASA_SPACESHIP_ROLE_ID = 1348305679877935124
 
 
-# Emoji Cycler for transitioning ASA SPACESHIP role users' nicknames
+# Emoji Cycler
 class EmojiCycler:
     def __init__(self, bot):
         self.bot = bot
@@ -117,25 +73,32 @@ class EmojiCycler:
         self.emojis = Config.EMOJI_SEQUENCE
         self.index = 0
 
-    @tasks.loop(seconds=5.0)  # Adjust the time interval for the emoji transition
+    @tasks.loop(seconds=2.0)  # Adjust time between transitions (in seconds)
     async def cycle_emoji(self):
         for guild in self.bot.guilds:
-            for member in guild.members:
-                if member.bot:  # Skip bots
-                    continue
-
-                # Check if the member has the ASA SPACESHIP role
-                if any(role.id == self.target_role_id for role in member.roles):
-                    # Get current nickname and update it with the new emoji
-                    current_nickname = member.nick if member.nick else member.display_name
-                    emoji = self.emojis[self.index % len(self.emojis)]
-                    new_nickname = f"{current_nickname} {emoji}"  # Replace old emoji with new one
+            role = guild.get_role(self.target_role_id)
+            if role:
+                for member in role.members:
+                    current_nickname = member.nick if member.nick else member.name
+                    
+                    # Find if any emoji is already in the nickname
+                    current_emoji = None
+                    for emoji in self.emojis:
+                        if emoji in current_nickname:
+                            current_emoji = emoji
+                            break
+                    
+                    # If emoji is present, replace it; if not, add the first emoji
+                    if current_emoji:
+                        new_nickname = current_nickname.replace(current_emoji, self.emojis[self.index % len(self.emojis)])
+                    else:
+                        new_nickname = f"{current_nickname} {self.emojis[self.index % len(self.emojis)]}"
                     
                     try:
                         await member.edit(nick=new_nickname)
                         print(f"[INFO] Updated {member.name}'s nickname to: {new_nickname}")
                     except discord.Forbidden:
-                        print(f"[ERROR] Missing permission to edit {member.name}'s nickname.")
+                        print("[ERROR] Missing permission to edit nickname.")
                     except Exception as e:
                         print(f"[ERROR] {e}")
 
