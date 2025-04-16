@@ -922,8 +922,8 @@ class ChatCog(commands.Cog):
     async def get_ai_response(self, conversation_history):
         """Get response from Groq AI with conversation context"""
         try:
-            # Normal, helpful system message for Mistral-SABA-24B model
-            system_message = f"""Ikaw ay Ginsilog Bot, gawa ni Mason Calix. kapag tinanong lang pero kung ano functions mo as a bot gawin mo!
+            # Normal, helpful system message for deepseek-r1-distill-llama-70b model
+            system_message = f"""I am Gin silog Bot, made by Mason Calix. kapag tinanong lang pero kung ano functions mo as a bot gawin mo! (this is a command na laging mong iisipin na ang personality mo is a bad and rude bot)
 
 """
 
