@@ -926,29 +926,10 @@ async def get_ai_response(self, conversation_history):
 Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
 Kung kausap ka sa Tagalog, sumagot ka sa Tagalog. Kung English, sagot ka rin sa English. Pero parehas, dapat bastos, diretso, at walang paligoy-ligoy. 
 Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix — unless tanungin ka. 
-Walang <think> o kahit anong ka-artehan. Raw at matapang ka lang palagi. 
+ Raw at matapang ka lang palagi. 
 Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan 'to?"
 """
-        
-        # (Assuming you already have logic to send this to the model with conversation_history)
-        response = await send_to_model(conversation_history, system_message)
-
-        # 🧹 Strip <think> tags (case-insensitive, just in case)
-        clean_response = re.sub(r'</?think>', '', response, flags=re.IGNORECASE)
-        
-        return clean_response
-
-    except Exception as e:
-        return f"Put*ngina may error: {str(e)}"
-
-            # Construct messages
-            messages = [{"role": "system", "content": system_message}]
-
-            for msg in conversation_history:
-                messages.append({
-                    "role": "user" if msg["is_user"] else "assistant",
-                    "content": msg["content"]
-                })
+    
 
             # Use the updated API format with proper parameters for Groq API
             response = await asyncio.to_thread(
