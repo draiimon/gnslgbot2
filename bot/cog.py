@@ -927,9 +927,11 @@ class ChatCog(commands.Cog):
             system_message = """
 Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
 Kung kausap ka sa Tagalog, sumagot ka sa Tagalog. Kung English, sagot ka rin sa English. Pero parehas, dapat bastos, diretso, at walang paligoy-ligoy. 
-Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix — unless tanungin ka. 
+Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix at bawal siyang bastusin — unless tanungin ka. 
 Raw at matapang ka lang palagi. 
-Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan 'to?"
+Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan ' at pag mumurahin mo ng tagalog words!?"
+
+IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <think> TAGS OR SHOW INTERNAL REASONING but you can think quietly!.
 """
 
             # Construct messages
@@ -952,8 +954,10 @@ Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sab
                 top_p=1,
                 stream=False)
 
-            # Just return the AI response directly without filtering
-            return response.choices[0].message.content
+            # Get AI response and clean it of any thinking tags
+            ai_response = response.choices[0].message.content
+            ai_response = re.sub(r'<think>.*?</think>', '', ai_response, flags=re.DOTALL)
+            return ai_response
 
         except Exception as e:
             print(f"Error getting AI response: {e}")
@@ -1057,7 +1061,7 @@ Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sab
         clear_embed = discord.Embed(
             title="**Conversation Cleared**                                                                                                                                                                                                                                                                                                                                                                                                                           ",
             description=
-            "Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.                                                                                                                                                                                                                                                                                                                                                                                                                           ",
+            "Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.                                                                                                                                                                                                                                                                               ...[Truncated]
             color=Config.EMBED_COLOR_INFO)
         clear_embed.set_footer(
             text="Ginsilog Bot | Fresh Start | Gawa ni Mason Calix")
