@@ -930,12 +930,6 @@ Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Ca
  Raw at matapang ka lang palagi. 
 Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan 'to?"
 """
-          # Add this utility method for removing <think>...</think> tags
-    @staticmethod
-    def strip_think_blocks(text: str) -> str:
-        """Removes <think>...</think> blocks from the given text."""
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-    
 
             # Use the updated API format with proper parameters for Groq API
             response = await asyncio.to_thread(
