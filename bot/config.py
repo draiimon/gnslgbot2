@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -9,6 +10,12 @@ class Config:
     DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
     COMMAND_PREFIX = 'g!'  
+
+      # Add this utility method for removing <think>...</think> tags
+    @staticmethod
+    def strip_think_blocks(text: str) -> str:
+        """Removes <think>...</think> blocks from the given text."""
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
     # Channel IDs
     RULES_CHANNEL_ID = 1345727358015115385
@@ -72,7 +79,7 @@ class Config:
         1345727357662658603: "𝐇𝐈𝐆𝐇",
         1345727357645885448: "𝐊𝐄𝐊𝐋𝐀𝐑𝐒",
         1345727357645885449: "𝐓𝐀𝐌𝐎𝐃𝐄𝐑𝐀𝐓𝐎𝐑",
-        1345727357645885442: "𝐀𝐒𝐀 𝐒𝐏𝐀𝐂𝐄𝐒𝐇𝐈𝐏",
+        1348305679877935124: "𝐀𝐒𝐀 𝐒𝐏𝐀𝐂𝐄𝐒𝐇𝐈𝐏",
         1345727357612195890: "𝐕𝐀𝐕𝐀𝐈𝐇𝐀𝐍",
         1345727357612195889: "𝐁𝐎𝐒𝐒𝐈𝐍𝐆",
         1345727357612195887: "𝐁𝐖𝐈𝐒𝐈𝐓𝐀",
