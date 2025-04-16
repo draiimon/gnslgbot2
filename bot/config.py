@@ -28,14 +28,14 @@ class Config:
     MAX_CONTEXT_MESSAGES = 10  # Increased for better conversation memory and coherence
 
     # Groq API settings
-    GROQ_MODEL = "mistral-saba-24b"  # Using exactly Mistral-SABA-24B as requested
-    MAX_TOKENS = 200  # Keep this to ensure concise responses
-    TEMPERATURE = 0.7  # Lowered to be much more coherent and human-like
+    GROQ_MODEL = "deepseek-r1-distill-llama-70b"  
+    MAX_TOKENS = 4096  # Keep this to ensure concise responses
+    TEMPERATURE = 0.6  # Lowered to be much more coherent and human-like
 
     # Bot personality settings
     BOT_LANGUAGE = "Tagalog"  
     BOT_PERSONALITY = "Aggressively Rude and Insulting"  # Added personality descriptor
-    BOT_CREATOR = "Mason Calox 2025"
+    BOT_CREATOR = "Mason Calix 2025"
     
     # Unicode map for text conversion - bold font style
     UNICODE_MAP = {
@@ -47,19 +47,19 @@ class Config:
         'i': '𝐢', 'j': '𝐣', 'k': '𝐤', 'l': '𝐥', 'm': '𝐦', 'n': '𝐧', 'o': '𝐨', 'p': '𝐩', 
         'q': '𝐪', 'r': '𝐫', 's': '𝐬', 't': '𝐭', 'u': '𝐮', 'v': '𝐯', 'w': '𝐰', 'x': '𝐱', 
         'y': '𝐲', 'z': '𝐳', 
-        '0': '0', '1': '1', '2': '2', '3': '3', '4': '4', 
-        '5': '5', '6': '6', '7': '7', '8': '8', '9': '9',
+        '0': '𝟎', '1': '𝟏', '2': '𝟐', '3': '𝟑', '4': '𝟒', 
+        '5': '𝟓', '6': '𝟔', '7': '𝟕', '8': '𝟖', '9': '𝟗',
         ' ': ' ', '_': '_', '-': '-', '.': '.', ',': ',', '!': '!', '?': '?'
     }
     
     # Role IDs and Emojis - centralized configuration
     # This avoids duplicated data in cog.py
     ROLE_EMOJI_MAP = {
-        705770837399306332: "👑",  # Owner
+        705770837399306332: "🌿",  # Owner
         1345727357662658603: "🌿",  # 𝐇𝐈𝐆𝐇
         1345727357645885448: "🍆",  # 𝐊𝐄𝐊𝐋𝐀𝐑𝐒
         1345727357645885449: "💦",  # 𝐓𝐀𝐌𝐎𝐃𝐄𝐑𝐀𝐓𝐎𝐑
-        1345727357645885442: "🚀",  # 𝐀𝐒𝐀 𝐒𝐏𝐀𝐂𝐄𝐒𝐇𝐈𝐏
+        1348305679877935124: "🚀",  # 𝐀𝐒𝐀 𝐒𝐏𝐀𝐂𝐄𝐒𝐇𝐈𝐏
         1345727357612195890: "🌸",  # 𝐕𝐀𝐕𝐀𝐈𝐇𝐀𝐍
         1345727357612195889: "💪",  # 𝐁𝐎𝐒𝐒𝐈𝐍𝐆
         1345727357612195887: "☁️",  # 𝐁𝐖𝐈𝐒𝐈𝐓𝐀
