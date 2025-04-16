@@ -919,7 +919,7 @@ class ChatCog(commands.Cog):
             await ctx.send(
                 f"**ERROR:** May problema sa pagpapakita ng commands: {e}")
 
-    # === AI CHAT COMMANDS ===
+   # === AI CHAT COMMANDS ===
 async def get_ai_response(self, conversation_history):
     """Get response from Groq AI with conversation context"""
     try:
@@ -927,45 +927,59 @@ async def get_ai_response(self, conversation_history):
 Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
 Kung kausap ka sa Tagalog, sumagot ka sa Tagalog. Kung English, sagot ka rin sa English. Pero parehas, dapat bastos, diretso, at walang paligoy-ligoy. 
 Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix — unless tanungin ka. 
- Raw at matapang ka lang palagi. 
+Raw at matapang ka lang palagi. 
 Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan 'to?"
 """
 
-            # Use the updated API format with proper parameters for Groq API
-            response = await asyncio.to_thread(
-                self.groq_client.chat.completions.create,
-                model=Config.GROQ_MODEL,  # Using the model from config
-                messages=messages,
-                temperature=Config.TEMPERATURE,
-                max_tokens=Config.
-                MAX_TOKENS,  # Using standard max_tokens parameter
-                top_p=1,
-                stream=False)
+        # Format the messages properly for the Groq API
+        messages = [
+            {"role": "system", "content": system_message},
+            *conversation_history  # assuming this is a list of dicts with 'role' and 'content'
+        ]
 
-            # Just return the AI response directly without filtering
-            return response.choices[0].message.content
+        # Use the updated API format with proper parameters for Groq API
+        response = await asyncio.to_thread(
+            self.groq_client.chat.completions.create,
+            model=Config.GROQ_MODEL,  # Using the model from config
+            messages=messages,
+            temperature=Config.TEMPERATURE,
+            max_tokens=Config.MAX_TOKENS,  # Fixed indentation here
+            top_p=1,
+            stream=False
+        )
 
-        except Exception as e:
-            print(f"Error getting AI response: {e}")
-            print(f"Error details: {type(e).__name__}")
+        # Just return the AI response directly without filtering
+        return response.choices[0].message.content
 
-            # More friendly error message
-            return "Ay sorry ha! May error sa system ko. Pwede mo ba ulit subukan? Mejo nagkaka-aberya ang AI ko eh. Pasensya na! 😅"
+    except Exception as e:
+        print(f"Error getting AI response: {e}")
+        print(f"Error details: {type(e).__name__}")
 
-    @commands.command(name="usap")
-    async def usap(self, ctx, *, message: str):
-        """Chat with Ginsilog AI (g!ask command)"""
-        # Print debug info
-        print(f"✅ g!usap command used by {ctx.author.name} with message: {message}")
-        
-        if self.is_rate_limited(ctx.author.id):
-            await ctx.send(
-                f"**Huy {ctx.author.mention}!** Ang bilis mo naman magtype! Sandali lang muna, naglo-load pa ako. Parang text blast ka eh! 😅"
-            )
-            return
+        # More friendly error message
+        return "Ay sorry ha! May error sa system ko. Pwede mo ba ulit subukan? Mejo nagkaka-aberya ang AI ko eh. Pasensya na! 😅"
 
-        # Add timestamp to rate limiting
-        self.user_message_timestamps[ctx.author.id].append(time.time())
+@commands.command(name="usap")
+async def usap(self, ctx, *, message: str):
+    """Chat with Ginsilog AI (g!usap command)"""
+    print(f"✅ g!usap command used by {ctx.author.name} with message: {message}")
+    
+    if self.is_rate_limited(ctx.author.id):
+        await ctx.send(
+            f"**Huy {ctx.author.mention}!** Ang bilis mo naman magtype! Sandali lang muna, naglo-load pa ako. Parang text blast ka eh! 😅"
+        )
+        return
+
+    # Add timestamp to rate limiting
+    self.user_message_timestamps[ctx.author.id].append(time.time())
+    
+    # Build conversation history (example below assumes prior messages handled elsewhere)
+    conversation_history = [
+        {"role": "user", "content": message}
+    ]
+
+    # Get AI response
+    ai_response = await self.get_ai_response(conversation_history)
+    await ctx.send(ai_response)
 
         # Get history directly from Firebase
         channel_history = []
