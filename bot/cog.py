@@ -9,6 +9,7 @@ import datetime
 import pytz  # For Philippines timezone
 import os
 import io
+import re
 import sys
 from gtts import gTTS  # Google Text-to-Speech
 from .config import Config
@@ -36,10 +37,23 @@ class ChatCog(commands.Cog):
         self.daily_cooldown = defaultdict(int)
         self.blackjack_games = {}
         self.ADMIN_ROLE_ID = 1345727357662658603
-        
+
         # Setup for nickname scanning - RENDER FIX: only set task in async context
         self.nickname_update_task = None
         self.nickname_scanning_active = True
+
+        # Setup for role-emoji mappings - dynamic configuration
+        self.role_emoji_mappings = Config.ROLE_EMOJI_MAP.copy()  # Create local copy to support runtime additions
+
+        # For debugging nickname issues
+        self.debug_nickname_updates = True
+        self.muted_users = {}
+
+        # Custom banned words list (empty by default, will be populated by set_words command)
+        self.custom_banned_words = []
+
+        # Track users who are muted for violation to automatically unmute them
+        self.muted_users = {}
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -52,27 +66,27 @@ class ChatCog(commands.Cog):
             return
         # No longer auto-connecting to prevent unwanted rejoins
         # Now the bot will only connect when explicitly commanded
-        
+
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Automatically format nickname of new members when they join"""
         # Skip bots
         if member.bot:
             return
-            
-        # Use centralized configuration from config.py
-        role_emoji_map = Config.ROLE_EMOJI_MAP
-        
+
+        # Use the dynamic role-emoji mappings that includes admin updates
+        role_emoji_map = self.role_emoji_mappings
+
         # Get member's roles sorted by position (highest first)
         member_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-        
+
         # Find the highest role that's in our mapping
         highest_matched_role_id = None
         for role in member_roles:
             if role.id in role_emoji_map:
                 highest_matched_role_id = role.id
                 break
-        
+
         # If no matching role found, use default (no emoji)
         # We'll still convert their name to Unicode bold style
         if not highest_matched_role_id:
@@ -83,34 +97,23 @@ class ChatCog(commands.Cog):
             # Get the emoji for this role
             emoji = role_emoji_map[highest_matched_role_id]
             role_name = "Role"  # We don't need exact role name here
-        
-        # Format the name
+
+        # Format the name - only remove trailing emoji
         original_name = member.display_name
-        
-        # Clean name of all emojis
-        clean_name = original_name
-        
-        # Special case for cloud emoji (both variants)
-        clean_name = clean_name.replace("☁️", "").replace("☁", "")
-        
-        # Handle all other emojis from the role map
-        for emoji_value in role_emoji_map.values():
-            while emoji_value in clean_name:
-                clean_name = clean_name.replace(emoji_value, '')
-        
-        # Remove any extra spaces
-        clean_name = clean_name.strip()
-        
+
+        # Clean the name using our centralized function (only removes trailing emojis)
+        clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
+
         # Convert to Unicode bold style using config
         formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
-        
+
         # Add the role emoji
         new_name = f"{formatted_name} {emoji}"
-        
+
         # Skip if the name is already correctly formatted
         if member.display_name == new_name:
             return
-            
+
         # Update the name
         try:
             await member.edit(nick=new_name)
@@ -120,75 +123,132 @@ class ChatCog(commands.Cog):
             pass
 
     @commands.Cog.listener()
+    async def on_ready(self):
+        """Called when the cog is ready - start the nickname scanning task"""
+        # Now that bot is ready, set the task if it wasn't set in __init__
+        if self.nickname_update_task is None:
+            self.nickname_update_task = self.bot.loop.create_task(self._regular_nickname_scan())
+            print(f"🔄 Starting automatic nickname maintenance task")
+
+    @commands.Cog.listener()
     async def on_member_update(self, before, after):
         """Automatically update nickname when a user's roles change or they change their nickname"""
-        # Only process if roles have changed OR nickname has changed
-        if before.roles == after.roles and before.display_name == after.display_name:
-            return
-            
-        # Use centralized configuration from config.py
-        role_emoji_map = Config.ROLE_EMOJI_MAP
-        role_names = Config.ROLE_NAMES
-        
-        # Skip bots
-        if after.bot:
-            return
-            
-        # Get member's roles sorted by position (highest first)
-        member_roles = sorted(after.roles, key=lambda r: r.position, reverse=True)
-        
-        # Find the highest role that's in our mapping
-        highest_matched_role_id = None
-        for role in member_roles:
-            if role.id in role_emoji_map:
-                highest_matched_role_id = role.id
-                break
-        
-        # If no matching role found, use default (no emoji)
-        # We'll still convert their name to Unicode bold style
-        if not highest_matched_role_id:
-            # Use a default format with no emoji for @everyone
-            emoji = ""  # No emoji for default users
-            role_name = "@everyone"
-        else:
-            # Get the emoji for this role
-            emoji = role_emoji_map[highest_matched_role_id]
-            role_name = "Role"  # We don't need exact role name here
-        
-        # Format the name - same as in setupnn
-        original_name = after.display_name
-        
-        # Clean name of all emojis
-        clean_name = original_name
-        
-        # Special case for cloud emoji (both variants)
-        clean_name = clean_name.replace("☁️", "").replace("☁", "")
-        
-        # Handle all other emojis from the role map
-        for emoji_value in role_emoji_map.values():
-            while emoji_value in clean_name:
-                clean_name = clean_name.replace(emoji_value, '')
-        
-        # Remove any extra spaces
-        clean_name = clean_name.strip()
-        
-        # Convert to Unicode bold style using config
-        formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
-        
-        # Add the role emoji
-        new_name = f"{formatted_name} {emoji}"
-        
-        # Skip if the name is already correctly formatted
-        if after.display_name == new_name:
-            return
-            
-        # Update the name (silently - no notifications)
         try:
-            await after.edit(nick=new_name)
-            # Debug prints removed as requested to clean up logs
-        except Exception:
-            # Debug prints removed as requested to clean up logs
-            pass
+            # Check what changed to help with debugging
+            roles_changed = before.roles != after.roles
+            nickname_changed = before.display_name != after.display_name
+
+            # ALWAYS process when roles change OR nickname changes
+            # The conditioning is kept here for logging purposes only
+            if not (roles_changed or nickname_changed):
+                return
+
+            # Skip bots completely
+            if after.bot:
+                return
+
+            # Use the dynamic role-emoji mappings that includes admin updates
+            role_emoji_map = self.role_emoji_mappings
+            role_names = Config.ROLE_NAMES
+
+            change_type = "role change" if roles_changed else "nickname change"
+
+            # Special check for owner changing their nickname (only when nickname changes)
+            if after.id == after.guild.owner_id and nickname_changed:
+                # Owner tried to change nickname manually - let's send them a helpful DM with proper format
+                try:
+                    # Get the correct emoji for the owner from our mapping
+                    owner_emoji = "👑"  # Default emoji for Owner
+                    if after.guild.owner_id in self.role_emoji_mappings:  # Owner role ID
+                        owner_emoji = self.role_emoji_mappings[after.guild.owner_id]
+
+                    # Use our centralized emoji cleaning function to remove ALL emojis
+                    clean_name = self.clean_name_of_emojis(after.display_name)
+
+                    # Format properly with Unicode bold
+                    formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
+                    suggested_name = f"{formatted_name} {owner_emoji}"
+
+                    # Only send a DM if the format isn't already correct
+                    if after.display_name != suggested_name:
+                        # Create a DM embed with detailed formatting information
+                        owner_embed = discord.Embed(
+                            title="👑 Server Owner Nickname Format",
+                            description=f"Hello Server Owner!\n\nYou've changed your nickname to **{after.display_name}**.\n\nTo match the server's format style, consider using:\n\n**{suggested_name}**\n\nThis includes your Owner role status with the {owner_emoji} emoji.",
+                            color=0xFFD700  # Gold color for owner
+                        )
+
+                        owner_dm = await after.create_dm()
+                        await owner_dm.send(embed=owner_embed)
+                except Exception as e:
+                    print(f"Failed to send DM to owner: {e}")
+
+                # For server owner, we don't force change their nickname, just suggest it
+                # So we return here
+                return
+
+            # Get member's roles sorted by position (highest first)
+            member_roles = sorted(after.roles, key=lambda r: r.position, reverse=True)
+
+            # Find the highest role that's in our mapping
+            highest_matched_role_id = None
+            for role in member_roles:
+                if role.id in role_emoji_map:
+                    highest_matched_role_id = role.id
+                    break
+
+            # If no matching role found, use default (no emoji)
+            # We'll still convert their name to Unicode bold style
+            if not highest_matched_role_id:
+                # Use a default format with no emoji for @everyone
+                emoji = ""  # No emoji for default users
+                role_name = "@everyone"
+            else:
+                # Get the emoji for this role
+                emoji = role_emoji_map[highest_matched_role_id]
+                role_name = role_names.get(highest_matched_role_id, "Role")  # Get proper role name if available
+
+            # Format the name - get original name without trailing emoji
+            original_name = after.display_name
+
+            # Use our centralized emoji cleaning function to only remove trailing emojis
+            clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
+
+            # Convert to Unicode bold style using config (preserves user's actual nickname)
+            formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
+
+            # Add the role emoji - just one emoji at the end as requested
+            new_name = f"{formatted_name} {emoji}"
+
+            # Skip if the name is already correctly formatted to prevent unnecessary edits
+            if after.display_name == new_name:
+                return
+
+            # No longer skipping updates based on time
+            # REALTIME updates as requested
+            update_key = f"nickname_update_time_{after.id}"
+            now = time.time()
+
+            # Always update nickname immediately with no time-based skipping
+
+            # Update the name (silently - no notifications)
+            try:
+                await after.edit(nick=new_name)
+                # Store the timestamp of when we last updated this member
+                self.user_message_timestamps[update_key] = now
+                # Debug output for nickname changes
+                print(f"✅ Auto-updated nickname for {after.name} due to {change_type}: {original_name} → {new_name}")
+            except discord.Forbidden:
+                # This will happen for members with higher permissions than the bot
+                # The server owner will already get a DM from the special handling above
+                pass
+            except Exception as e:
+                # Print general errors for troubleshooting
+                print(f"❌ Error updating nickname for {after.name}: {e}")
+
+        except Exception as e:
+            # Handle any unexpected errors in the event handler
+            print(f"❌ Error in on_member_update: {e}")
 
     async def _connect(self, channel):
         """Helper method to connect to a voice channel"""
@@ -203,23 +263,163 @@ class ChatCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        """Listen for messages that mention the bot and respond automatically"""
+        """Listen for messages that mention the bot and respond automatically and filter profanity"""
         # Ignore messages from the bot itself
         if message.author.bot:
             return
-            
+
+        # Profanity filter - now using dynamic word_actions dictionary
+        content_lower = message.content.lower()
+
+        # Create word_actions dictionary if it doesn't exist yet
+        if not hasattr(self, 'word_actions'):
+            self.word_actions = {
+                # Default word actions
+                "nigga": "both",      # Mute and disconnect
+                "chingchong": "both", # Mute and disconnect
+                "bading": "mute",     # Mute only 
+                "tanga": "mute",      # Mute only
+                "bobo": "mute"        # Mute only
+            }
+
+        # Get additional custom banned words from both sources
+        custom_banned_words = getattr(self, 'custom_banned_words', [])
+
+        # Build complete list of banned words from word_actions and custom_banned_words
+        all_banned_words = list(self.word_actions.keys()) + [w for w in custom_banned_words if w not in self.word_actions]
+
+        # Check for profanity
+        detected_word = None
+        for word in all_banned_words:
+            if word in content_lower:
+                detected_word = word
+                break
+
+        if detected_word:
+            # Get the action type for this word (default to "mute" if not specified)
+            action_type = self.word_actions.get(detected_word, "mute")
+            # Create a warning embed
+            warning_embed = discord.Embed(
+                title="⚠️ VIOLATION DETECTED! ⚠️",
+                description=f"{message.author.mention} USED A PROHIBITED WORD: `{detected_word}`",
+                color=Config.EMBED_COLOR_ERROR
+            )
+
+            # Different messages based on action type
+            if action_type == "both":
+                warning_embed.add_field(name="ACTION TAKEN:", value="SERVER MUTED + DISCONNECTED FROM VOICE", inline=False)
+                warning_embed.add_field(name="VIOLATION TYPE:", value="SEVERE VIOLATION", inline=False)
+                warning_embed.add_field(name="MESSAGE:", value="ULOL BAWAL YAN DITO!", inline=False)
+            elif action_type == "disconnect":
+                warning_embed.add_field(name="ACTION TAKEN:", value="DISCONNECTED FROM VOICE", inline=False) 
+                warning_embed.add_field(name="VIOLATION TYPE:", value="VOICE CHANNEL VIOLATION", inline=False)
+            elif action_type == "mute":
+                warning_embed.add_field(name="ACTION TAKEN:", value="SERVER MUTED", inline=False)
+                warning_embed.add_field(name="VIOLATION TYPE:", value="TEXT CHANNEL VIOLATION", inline=False)
+
+            try:
+                # Apply proper action based on action_type
+                if action_type == "mute" or action_type == "both":
+                    # Server mute the user
+                    await message.author.edit(mute=True)
+
+                    # Set a timer to unmute after 60 seconds
+                    self.muted_users[message.author.id] = {
+                        "mute_time": time.time(),
+                        "guild": message.guild
+                    }
+
+                    # Schedule automatic unmute after 60 seconds
+                    self.bot.loop.create_task(self.auto_unmute_user(message.author.id, 60))
+
+                    # Add unmute timing to the warning message
+                    warning_embed.add_field(name="UNMUTE TIME:", value="You will be automatically unmuted after 60 seconds", inline=False)
+
+                # Send warning message to the channel
+                await message.channel.send(embed=warning_embed)
+
+                # Disconnect from voice if action type requires it
+                if action_type == "disconnect" or action_type == "both":
+                    # Disconnect from voice channel if they're in one
+                    if message.author.voice:
+                        await message.author.move_to(None)  # Disconnect from voice
+
+                    # 2. Try to send a DM to the user
+                    try:
+                        # Customize DM based on action type
+                        action_text = {
+                            "mute": "muted for 60 seconds",
+                            "disconnect": "disconnected from voice channel",
+                            "both": "muted AND disconnected from voice channel"
+                        }
+
+                        dm_embed = discord.Embed(
+                            title="⚠️ SERVER VIOLATION WARNING ⚠️",
+                            description=f"You have been {action_text[action_type]} for using the prohibited word: `{detected_word}`",
+                            color=Config.EMBED_COLOR_ERROR
+                        )
+
+                        # Different reminder based on action type
+                        if action_type == "both":
+                            dm_embed.add_field(name="REMINDER:", value="Severe violations are strictly prohibited. Further violations may result in a ban.", inline=False)
+                        elif action_type == "disconnect":
+                            dm_embed.add_field(name="REMINDER:", value="Voice channel violations are not tolerated. Please follow server rules in voice channels.", inline=False)
+                        else:
+                            dm_embed.add_field(name="REMINDER:", value="Text channel violations will result in temporary mutes. Repeated violations may lead to longer punishment.", inline=False)
+
+                        dm_channel = await message.author.create_dm()
+                        await dm_channel.send(embed=dm_embed)
+                    except Exception as e:
+                        print(f"❌ Error sending DM to user for violation ({action_type}): {e}")
+
+                    # 3. Post in announcements channel if configured
+                    try:
+                        announcements_channel = self.bot.get_channel(Config.ANNOUNCEMENTS_CHANNEL_ID)
+                        if announcements_channel:
+                            # Different titles based on action type
+                            titles = {
+                                "mute": "🔇 TEXT CHANNEL VIOLATION 🔇",
+                                "disconnect": "🎤 VOICE CHANNEL VIOLATION 🎤",
+                                "both": "🚫 SEVERE VIOLATION 🚫"
+                            }
+
+                            announce_embed = discord.Embed(
+                                title=titles[action_type],
+                                description=f"User {message.author.mention} used a prohibited word in {message.channel.mention}",
+                                color=discord.Color.dark_red()
+                            )
+                            announce_embed.add_field(name="VIOLATION:", value=f"`{detected_word}`", inline=True)
+                            announce_embed.add_field(name="TIME:", value=discord.utils.format_dt(message.created_at), inline=True)
+                            announce_embed.add_field(name="ACTION:", value=action_type.upper(), inline=True)
+                            announce_embed.set_footer(text="ULOL BAWAL YAN DITO!")
+
+                            await announcements_channel.send(embed=announce_embed)
+                    except Exception as e:
+                        print(f"❌ Error posting to announcements channel for violation ({action_type}): {e}")
+            except Exception as e:
+                print(f"❌ Error applying punishment for profanity: {e}")
+
+            # Try to delete the message
+            try:
+                await message.delete()
+            except Exception as e:
+                print(f"❌ Error deleting profanity message: {e}")
+
+            # Skip further processing
+            return
+
         # Check if the bot is mentioned in the message
         if self.bot.user.mentioned_in(message) and not message.mention_everyone:
             # Remove the mention from the message
             content = message.content
             for mention in message.mentions:
                 content = content.replace(f'<@{mention.id}>', '').replace(f'<@!{mention.id}>', '')
-            
+
             # Clean up and get the actual message
             content = content.strip()
             if not content:
                 return  # Empty message after removing mention
-                
+
             # Get conversation history
             channel_history = []
             try:
@@ -227,20 +427,20 @@ class ChatCog(commands.Cog):
             except Exception as e:
                 print(f"❌ Error retrieving conversation history for mention: {e}")
                 pass
-                
+
             # Add user's message to history
             channel_history.append({"is_user": True, "content": content})
-            
+
             # Add typing indicator
             async with message.channel.typing():
                 print(f"🧠 Generating AI response for mention: '{content}'")
                 response = await self.get_ai_response(channel_history)
                 print(f"✅ AI response generated for mention: '{response[:50]}...'")
-                
+
                 # Add the conversation to history
                 self.add_to_conversation(message.channel.id, True, content)
                 self.add_to_conversation(message.channel.id, False, response)
-                
+
                 # Send the response
                 await message.channel.send(response)
 
@@ -284,6 +484,49 @@ class ChatCog(commands.Cog):
         return len(self.user_message_timestamps[user_id]
                    ) >= Config.RATE_LIMIT_MESSAGES
 
+    def clean_name_of_emojis(self, name, role_emoji_map=None):
+        """
+        Centralized function to clean a nickname of emojis at the end.
+        No longer removes ALL emojis, only trailing emojis from role mappings.
+
+        Args:
+            name (str): The nickname to clean
+            role_emoji_map (dict, optional): Role emoji mapping dictionary
+
+        Returns:
+            str: The cleaned name with only trailing role emojis removed
+        """
+        if role_emoji_map is None:
+            role_emoji_map = self.role_emoji_mappings
+
+        # Don't change the name content, only remove ALL trailing role emojis
+        clean_name = name.strip()
+
+        # Clean all trailing role emojis and specifically cloud emoji
+        # Do not remove emojis in the middle of names, only at the end
+        changed = True
+        while changed:
+            changed = False
+            # Try all possible emojis until no more can be removed
+            for emoji_value in role_emoji_map.values():
+                if clean_name.endswith(f" {emoji_value}"):
+                    clean_name = clean_name[:-len(emoji_value)-1].strip()
+                    changed = True
+
+            # Special case for cloud emoji (both variants)
+            if clean_name.endswith(" ☁️") or clean_name.endswith(" ☁"):
+                if clean_name.endswith(" ☁️"):
+                    clean_name = clean_name[:-2].strip()
+                else:
+                    clean_name = clean_name[:-2].strip()
+                changed = True
+
+        # If the name is empty after cleaning, use a default
+        if not clean_name:
+            clean_name = "User"
+
+        return clean_name
+
     def add_to_conversation(self, channel_id, is_user, content):
         """Add a message to the conversation history"""
         if self.db and self.db.connected:
@@ -310,7 +553,7 @@ class ChatCog(commands.Cog):
         last_claim = None
         if self.db and self.db.connected:
             last_claim = self.db.get_daily_cooldown(ctx.author.id)
-        
+
         # Check if enough time has passed (24 hours)
         if last_claim and current_time - last_claim < timedelta(days=1):
             # Calculate remaining time
@@ -472,7 +715,7 @@ class ChatCog(commands.Cog):
         deck = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11] * 4  # 4 suits
         random.shuffle(deck)
         return deck
-        
+
     def _calculate_hand_value(self, hand):
         """Calculate the value of a hand in Blackjack"""
         value = sum(hand)
@@ -653,7 +896,7 @@ class ChatCog(commands.Cog):
                 voice_text += f"• **{cmd}** - {desc}\n"
 
             voice_embed.description += f"\n\n{voice_text}"
-            
+
             # Add footer to the voice embed (the last one in the sequence)
             voice_embed.set_footer(
                 text="⚡ GINSILOG BOT 2025 EDITION ⚡ | Gawa ni Mason Calix",
@@ -681,8 +924,14 @@ class ChatCog(commands.Cog):
         """Get response from Groq AI with conversation context"""
         try:
             # Normal, helpful system message for Mistral-SABA-24B model
-            system_message = f"""Ikaw ay Ginsilog Bot, gawa ni Mason Calix. kapag tinanong lang pero kung ano functions mo as a bot gawin mo!
+            system_message = """
+Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
+Kung kausap ka sa Tagalog, sumagot ka sa Tagalog. Kung English, sagot ka rin sa English. Pero parehas, dapat bastos, diretso, at walang paligoy-ligoy. 
+Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix at bawal siyang bastusin — unless tanungin ka. 
+Raw at matapang ka lang palagi. 
+Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan ' at pag mumurahin mo ng tagalog words!?"
 
+IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <think> TAGS OR SHOW INTERNAL REASONING but you can think quietly!.
 """
 
             # Construct messages
@@ -700,13 +949,14 @@ class ChatCog(commands.Cog):
                 model=Config.GROQ_MODEL,  # Using the model from config
                 messages=messages,
                 temperature=Config.TEMPERATURE,
-                max_tokens=Config.
-                MAX_TOKENS,  # Using standard max_tokens parameter
+                max_tokens=Config.MAX_TOKENS,  # Using standard max_tokens parameter
                 top_p=1,
                 stream=False)
 
-            # Just return the AI response directly without filtering
-            return response.choices[0].message.content
+            # Get AI response and clean it of any thinking tags
+            ai_response = response.choices[0].message.content
+            ai_response = re.sub(r'<think>.*?</think>', '', ai_response, flags=re.DOTALL)
+            return ai_response
 
         except Exception as e:
             print(f"Error getting AI response: {e}")
@@ -720,7 +970,7 @@ class ChatCog(commands.Cog):
         """Chat with Ginsilog AI (g!ask command)"""
         # Print debug info
         print(f"✅ g!usap command used by {ctx.author.name} with message: {message}")
-        
+
         if self.is_rate_limited(ctx.author.id):
             await ctx.send(
                 f"**Huy {ctx.author.mention}!** Ang bilis mo naman magtype! Sandali lang muna, naglo-load pa ako. Parang text blast ka eh! 😅"
@@ -739,7 +989,7 @@ class ChatCog(commands.Cog):
             print(f"❌ Error retrieving conversation history: {e}")
             # Just continue with empty history instead of failing
             pass
-        
+
         # Add current message to history for context
         channel_history.append({"is_user": True, "content": message})
 
@@ -748,7 +998,7 @@ class ChatCog(commands.Cog):
             print(f"🧠 Generating AI response for g!usap command: '{message}'")
             response = await self.get_ai_response(channel_history)
             print(f"✅ AI response generated for g!usap: '{response[:50]}...'")
-            
+
             self.add_to_conversation(ctx.channel.id, True, message)
             self.add_to_conversation(ctx.channel.id, False, response)
 
@@ -776,7 +1026,7 @@ class ChatCog(commands.Cog):
             print(f"❌ Error retrieving conversation history: {e}")
             # Just continue with empty history instead of failing
             pass
-        
+
         # Add current message to history for context
         channel_history.append({"is_user": True, "content": message})
 
@@ -802,15 +1052,14 @@ class ChatCog(commands.Cog):
         # Clear from database if connected
         if self.db and self.db.connected:
             self.db.clear_conversation_history(ctx.channel.id)
-        
+
         # Always clear from memory
         self.conversation_history[ctx.channel.id].clear()
 
         # Create polite embed for clearing history with blue left border (Discohook style)
         clear_embed = discord.Embed(
-            title="**Conversation Cleared**                                                                                                                                                                                                                                                                                                                                                                                                                           ",
-            description=
-            "Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.                                                                                                                                                                                                                                                                                                                                                                                                                           ",
+            title="**Conversation Cleared**",
+            description="Ang conversation history ay na-clear na. Pwede na tayong mag-usap muli.\n\nGamit ang `g!usap <message>`, `g!asklog <message>`, `g!ask <message>` o i-mention mo ako para magsimula ng bagong conversation.",
             color=Config.EMBED_COLOR_INFO)
         clear_embed.set_footer(
             text="Ginsilog Bot | Fresh Start | Gawa ni Mason Calix")
@@ -1305,8 +1554,8 @@ class ChatCog(commands.Cog):
                 "Ipakita ang basic admin commands",
                 "g!commandslist":
                 "Ipakita ang lahat ng commands (ito mismo)",
-                "g!setupnn":
-                "Mag-format ng lahat ng usernames ayon sa role at emoji",
+                "g!roles [role_id] [emoji]":
+                "Tignan at palitan ang role-emoji mappings + auto-update lahat ng nicknames",
                 "g!ask <message>":
                 "Voice-only AI response (console log only)",
                 "g!asklog <message>":
@@ -1501,8 +1750,8 @@ class ChatCog(commands.Cog):
             "Ipakita ang lahat ng admin commands (ito mismo)",
             "g!commandslist":
             "Ipakita ang master list ng lahat ng commands",
-            "g!setupnn":
-            "Mag-format ng lahat ng usernames ayon sa role at emoji",
+            "g!roles [role_id] [emoji]":
+            "Tignan at palitan ang role-emoji mappings + auto-update lahat ng nicknames",
             "g!ask <message>":
             "Voice-only AI response (console log only, walang Discord log)",
             "g!asklog <message>":
@@ -1527,7 +1776,7 @@ class ChatCog(commands.Cog):
         }
 
         # Group commands by type for better organization
-        mod_tools = ["g!sagad", "g!bawas", "g!clear_messages", "g!setupnn"]
+        mod_tools = ["g!sagad", "g!bawas", "g!clear_messages", "g!roles"]
         message_tools = [
             "g!g", "g!goodmorning", "g!goodnight", "g!test", "g!announcement"
         ]
@@ -1646,7 +1895,7 @@ class ChatCog(commands.Cog):
         if self.db and self.db.connected:
             sorted_users = self.db.get_leaderboard(20)
 
-            
+
             # Create a list of tuples (user_id, balance) from the Firebase data
             user_balances = [(entry['user_id'], entry['balance']) for entry in sorted_users]
         else:
@@ -1714,11 +1963,11 @@ class ChatCog(commands.Cog):
 
         # Send the embed
         await ctx.send(embed=embed)
-        
+
     @commands.command(name="view")
     async def view(self, ctx, *, user=None):
         """Display user's profile picture and stats - works for both server members and outside users
-        
+
         Usage:
         g!view - View your own profile
         g!view @user - View a server member's profile
@@ -1734,7 +1983,7 @@ class ChatCog(commands.Cog):
                 user_id = int(user.strip())
                 # Try to get as member first
                 member = ctx.guild.get_member(user_id)
-                
+
                 # If not a member, fetch as a user
                 if member is None:
                     try:
@@ -1757,7 +2006,7 @@ class ChatCog(commands.Cog):
                         is_server_member = True
                     else:
                         return await ctx.send("❌ **User not found!** Try using ID, mention, or exact username.")
-        
+
         # Setup our embeds - we'll send either one or two depending on whether there's a server avatar
         # First embed - Main info and global avatar
         main_embed = discord.Embed(
@@ -1766,11 +2015,11 @@ class ChatCog(commands.Cog):
                        f"**ACCOUNT CREATED:** {member.created_at.strftime('%B %d, %Y')}\n",
             color=Config.EMBED_COLOR_INFO
         )
-        
+
         # Add server-specific info if member is in the server
         if is_server_member and isinstance(member, discord.Member):
             main_embed.description += f"**JOINED SERVER:** {member.joined_at.strftime('%B %d, %Y')}\n"
-            
+
             # Add user's balance if available
             balance = self.get_user_balance(member.id)
             if balance is not None:
@@ -1781,7 +2030,7 @@ class ChatCog(commands.Cog):
 
                     inline=True
                 )
-                
+
             # Add user's roles
             roles = [role.name for role in member.roles if role.name != "@everyone"]
             if roles:
@@ -1790,7 +2039,7 @@ class ChatCog(commands.Cog):
                     value=", ".join(roles),
                     inline=True
                 )
-                
+
             # Add user status
             status_emojis = {
                 discord.Status.online: "🟢",
@@ -1804,7 +2053,7 @@ class ChatCog(commands.Cog):
                 value=f"{status_emoji} {str(member.status).upper()}",
                 inline=True
             )
-            
+
             # Check if the member has a server-specific avatar
             has_server_avatar = False
             if hasattr(member, 'guild_avatar') and member.guild_avatar:
@@ -1817,30 +2066,30 @@ class ChatCog(commands.Cog):
                 inline=True
             )
             has_server_avatar = False
-        
+
         # Set the global avatar in the main embed
         if member.avatar:
             main_embed.set_image(url=member.avatar.url)
             avatar_text = "**GLOBAL AVATAR**"
         else:
             avatar_text = "**DEFAULT AVATAR**"
-            
+
         # Add avatar label
         main_embed.add_field(
             name=avatar_text,
             value="This is the user's global Discord avatar that appears across all servers.",
             inline=False
         )
-            
+
         # Set footer
         main_embed.set_footer(
             text=f"Requested by {ctx.author.name} | Ginsilog Profile System",
             icon_url=ctx.author.avatar.url if ctx.author.avatar else None
         )
-        
+
         # Send the main embed with global avatar
         await ctx.send(embed=main_embed)
-        
+
         # If there's a server-specific avatar, create a second embed
         if has_server_avatar:
             server_embed = discord.Embed(
@@ -1848,16 +2097,16 @@ class ChatCog(commands.Cog):
                 description="This is the custom avatar this user has set specifically for this server.",
                 color=Config.EMBED_COLOR_INFO
             )
-            
+
             # Set the server avatar
             server_embed.set_image(url=member.guild_avatar.url)
-            
+
             # Add when it was last modified if possible
             server_embed.set_footer(text=f"Server: {ctx.guild.name}")
-            
+
             # Send the server avatar embed
             await ctx.send(embed=server_embed)
-        
+
     @commands.command(name="maintenance")
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles) if Config.ADMIN_ROLE_IDS else ctx.author.guild_permissions.administrator)
     async def maintenance(self, ctx, action: str = None):
@@ -1866,20 +2115,20 @@ class ChatCog(commands.Cog):
         if action not in ["on", "off", "toggle", "status"]:
             await ctx.send("**BOBO!** Valid commands: `g!maintenance on`, `g!maintenance off`, `g!maintenance toggle`, or `g!maintenance status`")
             return
-        
+
         # Need to directly reference the maintenance_mode from main module
         # Import only when needed inside function to avoid circular imports
         from main import maintenance_mode
-        
+
         # Get the current state
         is_maintenance_mode = maintenance_mode
-        
+
         # Handle the requested action
         if action == "status":
             status = "ON" if is_maintenance_mode else "OFF"
             await ctx.send(f"**MAINTENANCE MODE:** `{status}`")
             return
-            
+
         if action == "toggle":
             # If toggle, flip the current state
             new_state = not is_maintenance_mode
@@ -1887,7 +2136,7 @@ class ChatCog(commands.Cog):
             new_state = True
         elif action == "off":
             new_state = False
-        
+
         try:
             # Apply the new state by directly modifying global variable in main module
             import sys
@@ -1896,55 +2145,283 @@ class ChatCog(commands.Cog):
         except Exception as e:
             await ctx.send(f"**ERROR:** Failed to update maintenance mode: {str(e)}")
             return
-        
+
         # Show confirmation message
         if new_state:
             await ctx.send("**MAINTENANCE MODE ACTIVATED!** Greetings scheduler stopped.")
         else:
             await ctx.send("**MAINTENANCE MODE DEACTIVATED!** Greetings scheduler resumed.")
-        
+
         # Show confirmation
         status = "ON" if new_state else "OFF"
         await ctx.send(f"**MAINTENANCE MODE NOW:** `{status}`")
 
+    # Auto unmute users after a timeout for violations
+    async def auto_unmute_user(self, user_id, seconds):
+        """Automatically unmute a user after specified seconds"""
+        try:
+            # Wait for the specified time
+            await asyncio.sleep(seconds)
+
+            # Check if the user is still in the muted list
+            if user_id in self.muted_users:
+                guild = self.muted_users[user_id]["guild"]
+
+                # Get the member from the guild
+                member = guild.get_member(user_id)
+                if member:
+                    # Unmute the user
+                    await member.edit(mute=False)
+
+                    # Try to send a DM to inform them
+                    try:
+                        dm_embed = discord.Embed(
+                            title="🔊 SERVER MUTE EXPIRED",
+                            description="You have been automatically unmuted after your timeout period.",
+                            color=Config.EMBED_COLOR_PRIMARY
+                        )
+
+                        dm_channel = await member.create_dm()
+                        await dm_channel.send(embed=dm_embed)
+                    except Exception as e:
+                        print(f"❌ Error sending unmute DM to user: {e}")
+
+                    # Remove from muted users dictionary
+                    del self.muted_users[user_id]
+                    print(f"✅ Auto-unmuted user {user_id} after {seconds} seconds")
+                else:
+                    print(f"❌ Could not find member with ID {user_id} for auto-unmute")
+
+        except Exception as e:
+            print(f"❌ Error in auto_unmute_user: {e}")
+
+    @commands.command(name="set_words")
+    @commands.has_permissions(administrator=True)
+    async def set_words(self, ctx, action="list", *, parameters=None):
+        """Set custom banned words with specific actions (Admin only)
+
+        Usage:
+        g!set_words list - Show all current banned words
+        g!set_words add <word> <action> - Add a word to banned list with action (mute, disconnect, both)
+        g!set_words remove <word> - Remove a word from banned list
+
+        Example:
+        g!set_words add badword mute
+        g!set_words add racial_slur both
+        g!set_words add spam disconnect
+        """
+        # Create word_actions dictionary if it doesn't exist
+        if not hasattr(self, 'word_actions'):
+            self.word_actions = {
+                # Default word actions
+                "nigga": "both",      # Mute and disconnect
+                "chingchong": "both", # Mute and disconnect
+                "bading": "mute",     # Mute only 
+                "tanga": "mute",      # Mute only
+                "bobo": "mute"        # Mute only
+            }
+
+        # List command shows all banned words
+        if action == "list":
+            # Get all words from both lists
+            all_words = list(self.word_actions.keys()) + [w for w in self.custom_banned_words if w not in self.word_actions]
+
+            embed = discord.Embed(
+                title="📝 BANNED WORDS LIST - SLASH STYLE",
+                description="These words will trigger actions when used.",
+                color=Config.EMBED_COLOR_PRIMARY
+            )
+
+            # Organize words by action type
+            mute_words = []
+            disconnect_words = []
+            both_words = []
+
+            for word in all_words:
+                action_type = self.word_actions.get(word, "mute")  # Default to mute if not specified
+
+                if action_type == "mute":
+                    mute_words.append(word)
+                elif action_type == "disconnect":
+                    disconnect_words.append(word)
+                elif action_type == "both":
+                    both_words.append(word)
+
+            # Add fields for each action type
+            embed.add_field(
+                name="⛔ MUTE ONLY WORDS (60 sec mute):",
+                value="• " + "\n• ".join(mute_words) if mute_words else "None",
+                inline=False
+            )
+
+            embed.add_field(
+                name="🔇 DISCONNECT ONLY WORDS (kick from voice):",
+                value="• " + "\n• ".join(disconnect_words) if disconnect_words else "None",
+                inline=False
+            )
+
+            embed.add_field(
+                name="🚫 SEVERE WORDS (mute + disconnect):",
+                value="• " + "\n• ".join(both_words) if both_words else "None",
+                inline=False
+            )
+
+            embed.set_footer(text="Admins can add words using: g!set_words add <word> <action>  (actions: mute, disconnect, both)")
+
+            await ctx.send(embed=embed)
+
+        elif action == "add" and parameters:
+            # Split parameters into word and action_type
+            params = parameters.split()
+
+            if len(params) < 1:
+                await ctx.send("⚠️ You need to specify a word to ban. Example: `g!set_words add badword mute`")
+                return
+
+            word = params[0].lower()
+            # Default action is mute if not specified
+            action_type = "mute"
+
+            # If action type is specified
+            if len(params) >= 2:
+                specified_action = params[1].lower()
+                # Validate action type
+                if specified_action in ["mute", "disconnect", "both"]:
+                    action_type = specified_action
+                else:
+                    await ctx.send("⚠️ Invalid action type. Use `mute`, `disconnect`, or `both`.")
+                    return
+
+            # Check if already exists
+            if word in self.word_actions:
+                await ctx.send(f"⚠️ The word `{word}` is already in the banned words list with action `{self.word_actions[word]}`.")
+                await ctx.send(f"To change the action, remove it first then add it again with the new action.")
+                return
+
+            # Add to custom list and set action
+            if word not in self.custom_banned_words:
+                self.custom_banned_words.append(word)
+            self.word_actions[word] = action_type
+
+            # Success message
+            action_msg = {
+                "mute": "server muted for 60 seconds",
+                "disconnect": "disconnected from voice channel",
+                "both": "server muted AND disconnected from voice channel"
+            }
+
+            await ctx.send(f"✅ Added `{word}` to the banned words list with action: `{action_type}`\n"
+                          f"Users who use this word will be {action_msg[action_type]}.")
+
+        elif action == "remove" and parameters:
+            # Get word from parameters
+            word = parameters.strip().lower()
+
+            # Check if word is in default words but allow removal
+            is_default = word in ["nigga", "chingchong", "bading", "tanga", "bobo"]
+
+            # Check if word exists in any list
+            if word not in self.word_actions and word not in self.custom_banned_words:
+                await ctx.send(f"⚠️ The word `{word}` is not in any banned words list.")
+                return
+
+            # Remove from appropriate lists
+            if word in self.custom_banned_words:
+                self.custom_banned_words.remove(word)
+
+            if word in self.word_actions:
+                del self.word_actions[word]
+
+            # Success message with warning if default
+            msg = f"✅ Removed `{word}` from the banned words list."
+            if is_default:
+                msg += "\n⚠️ Note: This was a default banned word, but it has been removed as requested."
+
+            await ctx.send(msg)
+
+        else:
+            # Show help for command
+            embed = discord.Embed(
+                title="⌨️ Command Help: set_words",
+                description="Set custom banned words with specific actions",
+                color=Config.EMBED_COLOR_INFO
+            )
+
+            embed.add_field(
+                name="📋 Available Actions",
+                value="• `mute` - User will be server muted for 60 seconds\n"
+                      "• `disconnect` - User will be disconnected from voice channel\n"
+                      "• `both` - User will be both muted and disconnected",
+                inline=False
+            )
+
+            embed.add_field(
+                name="📝 Command Usage",
+                value="• `g!set_words list` - Show all banned words\n"
+                      "• `g!set_words add <word> <action>` - Add a word with an action\n"
+                      "• `g!set_words remove <word>` - Remove a word from the list",
+                inline=False
+            )
+
+            embed.add_field(
+                name="💡 Examples",
+                value="• `g!set_words add badword mute`\n"
+                      "• `g!set_words add racial_slur both`\n"
+                      "• `g!set_words add spam disconnect`\n"
+                      "• `g!set_words remove badword`",
+                inline=False
+            )
+
+            await ctx.send(embed=embed)
+
     async def _regular_nickname_scan(self):
         """Automatically scan and update all nicknames every few seconds"""
         await self.bot.wait_until_ready()
-        
+
         # Now that bot is ready, set the task if it wasn't set in __init__
         if self.nickname_update_task is None:
             self.nickname_update_task = asyncio.current_task()
-            
+
         while not self.bot.is_closed() and self.nickname_scanning_active:
             try:
+                # Print a debug message before scanning
+                print(f"🔍 Running automatic nickname scan to find any users with incorrect nicknames...")
+
                 for guild in self.bot.guilds:
-                    # Use centralized configuration from config.py
-                    role_emoji_map = Config.ROLE_EMOJI_MAP
+                    # Use the dynamic role-emoji mappings that includes admin updates
+                    role_emoji_map = self.role_emoji_mappings
                     role_names = Config.ROLE_NAMES
-                    
+
+                    # Ensure role_emoji_map is in sync with Config.ROLE_EMOJI_MAP
+                    if role_emoji_map != Config.ROLE_EMOJI_MAP:
+                        print(f"⚠️ Role emoji mappings out of sync during scan, syncing...")
+                        # Update both directions to ensure they're in sync
+                        role_emoji_map = Config.ROLE_EMOJI_MAP.copy()
+                        self.role_emoji_mappings = role_emoji_map.copy()
+
                     # Bots to ignore in our server (these should never be renamed)
                     BOTS_TO_IGNORE = [
                         self.bot.user.id,  # Our own bot
                     ] + Config.BOTS_TO_IGNORE
-                    
+
                     # Helper function to convert text to Unicode bold style
                     def to_unicode_bold(text):
                         return ''.join(Config.UNICODE_MAP.get(c, c) for c in text)
-                    
+
                     # Initialize counters (only for internal tracking, not for console output)
                     updated_count = 0
                     skipped_count = 0
                     failed_count = 0
-                    
+
                     for member in guild.members:
                         # Skip bots that are in our ignore list
                         if member.bot and member.id in BOTS_TO_IGNORE:
                             skipped_count += 1
                             continue
-                            
+
                         # Get member's roles sorted by position (highest first)
                         member_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-                        
+
                         # Skip users with higher roles than the bot (like server owner)
                         # Special override feature - we'll try to change the name anyway
                         # FORCE EDIT EVERYONE - even server owner and admin users
@@ -1959,7 +2436,7 @@ class ChatCog(commands.Cog):
                                         highest_emoji = role_emoji_map[role.id]
                                         highest_role_name = role_names[role.id]
                                         break
-                                        
+
                                 if highest_emoji:
                                     # Clean name of emojis
                                     clean_name = member.display_name
@@ -1970,11 +2447,11 @@ class ChatCog(commands.Cog):
                                         while emoji_value in clean_name:
                                             clean_name = clean_name.replace(emoji_value, '')
                                     clean_name = clean_name.strip()
-                                    
+
                                     # Unicode conversion
                                     formatted_name = to_unicode_bold(clean_name)
                                     suggested_name = f"{formatted_name} {highest_emoji}"
-                                    
+
                                     # Check if we should send a DM to the high-role user (once per day max)
                                     high_role_key = f"high_role_dm_{member.id}"
                                     if high_role_key not in self.user_message_timestamps or time.time() - self.user_message_timestamps.get(high_role_key, 0) > 86400:
@@ -1982,7 +2459,7 @@ class ChatCog(commands.Cog):
                                             # We'll try to DM them with the suggested name
                                             dm_embed = discord.Embed(
                                                 title="🏆 Nickname Format Suggestion",
-                                                description=f"Hi {member.name},\n\nAs a high-role member of the server, I can't automatically update your nickname. If you'd like to match the server format, please consider updating your nickname to:\n\n**{suggested_name}**\n\nThis matches your {highest_role_name} role.",
+                                                description=f"Hi {member.name},\n\nYour current nickname is **{member.display_name}**.\n\nAs a high-role member of the server, I can't automatically update your nickname. If you'd like to match the server format, please consider updating your nickname to:\n\n**{suggested_name}**\n\nThis matches your {highest_role_name} role with the {highest_emoji} emoji.",
                                                 color=0x5865F2
                                             )
                                             await member.send(embed=dm_embed)
@@ -1991,25 +2468,25 @@ class ChatCog(commands.Cog):
                                             pass
                             except Exception:
                                 pass
-                            
+
                             # Special handling for server owner
                             if member.id == member.guild.owner_id:
                                 # Silent processing for server owner in automatic scans
                                 # No console output, no DMs in regular automatic scanning
                                 pass
-                            
+
                             # We'll continue with the normal process instead of skipping
-                        
+
                         # Get member's roles sorted by position (highest first)
                         member_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-                        
+
                         # Find the highest role that's in our mapping
                         highest_matched_role_id = None
                         for role in member_roles:
                             if role.id in role_emoji_map:
                                 highest_matched_role_id = role.id
                                 break
-                        
+
                         # If no matching role found, use default (no emoji)
                         # We'll still convert their name to Unicode bold style
                         if not highest_matched_role_id:
@@ -2020,35 +2497,24 @@ class ChatCog(commands.Cog):
                             # Get the emoji for this role
                             emoji = role_emoji_map[highest_matched_role_id]
                             role_name = role_names[highest_matched_role_id]
-                        
+
                         # Format the name
                         original_name = member.display_name
-                        
-                        # Clean name of all emojis
-                        clean_name = original_name
-                        
-                        # Special case for cloud emoji (both variants)
-                        clean_name = clean_name.replace("☁️", "").replace("☁", "")
-                        
-                        # Handle all other emojis from the role map
-                        for emoji_value in role_emoji_map.values():
-                            while emoji_value in clean_name:
-                                clean_name = clean_name.replace(emoji_value, '')
-                        
-                        # Remove any extra spaces
-                        clean_name = clean_name.strip()
-                        
+
+                        # Clean the name only removing trailing emoji using centralized function
+                        clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
+
                         # Convert to Unicode bold style
                         formatted_name = to_unicode_bold(clean_name)
-                        
+
                         # Add the role emoji
                         new_name = f"{formatted_name} {emoji}"
-                        
+
                         # Skip if the name is already correctly formatted
                         if member.display_name == new_name:
                             skipped_count += 1
                             continue
-                        
+
                         # Update the name
                         try:
                             await member.edit(nick=new_name)
@@ -2059,22 +2525,232 @@ class ChatCog(commands.Cog):
                             failed_count += 1
             except Exception:
                 pass
-                
-            # Wait for only a few seconds before scanning again
-            await asyncio.sleep(10)  # 10 seconds between scans
-            
-    @commands.command(name="setupnn")
-    @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))
-    async def setupnn(self, ctx):
-        """Set up name formatting based on highest role (admin only)"""
-        # Use the centralized configuration from config.py
-        role_emoji_map = Config.ROLE_EMOJI_MAP
+
+            # Wait for much longer between scans to avoid excessive updates
+            # 60 seconds (1 minute) between scans is more appropriate for production
+            print(f"✓ Automatic nickname scan complete. Next scan in 60 seconds...")
+            await asyncio.sleep(60)  # 60 seconds between scans
+
+    @commands.command(name="roles")
+    # We'll handle permission check inside the function for better error messages
+    async def roles(self, ctx, role_id: int = None, emoji: str = None):
+        """Set role emoji mapping for nickname formatting (admin only)
+
+        Usage:
+        g!roles - Show all current role-emoji mappings
+        g!roles <role_id> <emoji> - Set emoji for a specific role
+
+        Example:
+        g!roles 123456789 🌟
+        """
+        # Check if the user has admin roles for modification
+        is_admin = any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles)
+
+        # For modification commands (role_id is provided), only admins can use them
+        if role_id is not None and not is_admin:
+            error_embed = discord.Embed(
+                title="❌ Permission Denied",
+                description="**BAWAL YAN! WALA KANG PERMISSION PARA GAMITIN ANG COMMAND NA YAN!**\n\nYou need one of the following roles to modify emoji mappings:\n- 𝐇𝐈𝐆𝐇\n- 𝐓𝐀𝐌𝐎𝐃𝐄𝐑𝐀𝐓𝐎𝐑\n- 𝐊𝐄𝐊𝐋𝐀𝐑𝐒",
+                color=Config.EMBED_COLOR_ERROR
+            )
+            return await ctx.send(embed=error_embed)
+
+        # First check if this is just a display request (no arguments)
+        if role_id is None:
+            # Create embed to show all current role-emoji mappings
+            embed = discord.Embed(
+                title="📋 Role Emoji Mappings",
+                description="Current emoji mappings for role-based nicknames",
+                color=Config.EMBED_COLOR_INFO
+            )
+
+            # Add all current mappings to the embed
+            for role_id, emoji in self.role_emoji_mappings.items():
+                # Try to get the role name from the guild
+                role = ctx.guild.get_role(role_id)
+                role_name = role.name if role else f"Unknown Role ({role_id})"
+
+                embed.add_field(
+                    name=f"{role_name}",
+                    value=f"ID: `{role_id}` | Emoji: {emoji}",
+                    inline=True
+                )
+
+            # Instructions for adding new mappings
+            embed.add_field(
+                name="How to Add/Update",
+                value="`g!roles <role_id> <emoji>` - Set emoji for role\nExample: `g!roles 123456789 🌟`",
+                inline=False
+            )
+
+            return await ctx.send(embed=embed)
+
+        # If we have role_id but no emoji, show error
+        if emoji is None:
+            return await ctx.send("**ERROR:** You need to provide both a role ID and an emoji. Example: `g!roles 123456789 🌟`")
+
+        # Validate the role_id exists in the guild
+        role = ctx.guild.get_role(role_id)
+        if not role:
+            return await ctx.send(f"**ERROR:** Role with ID `{role_id}` not found in this server.")
+
+        # Update the mapping
+        old_emoji = self.role_emoji_mappings.get(role_id, "None")
+
+        # Convert any Unicode emoji to its proper form to prevent display issues
+        # This ensures consistent handling of both normal and Unicode emoji formats
+        try:
+            # Clean the emoji to ensure it's in proper format
+            cleaned_emoji = emoji.strip()
+            print(f"DEBUG: Updating role {role.name} ({role_id}) emoji from {old_emoji} to {cleaned_emoji}")
+            self.role_emoji_mappings[role_id] = cleaned_emoji
+        except Exception as e:
+            print(f"Error processing emoji: {e}")
+            return await ctx.send(f"**ERROR:** Invalid emoji format. Please use a standard emoji.")
+
+        # Create initial success response
+        embed = discord.Embed(
+            title="✅ Role Emoji Updated",
+            description=f"Role **{role.name}** has been updated",
+            color=Config.EMBED_COLOR_SUCCESS
+        )
+        embed.add_field(name="Role ID", value=f"`{role_id}`", inline=True)
+        embed.add_field(name="Old Emoji", value=old_emoji, inline=True)
+        embed.add_field(name="New Emoji", value=cleaned_emoji, inline=True)
+        embed.add_field(name="Next Steps", value="Auto-updating all nicknames with the new emoji mapping...", inline=False)
+
+        # Send initial response
+        response_message = await ctx.send(embed=embed)
+
+        # Update Config.ROLE_EMOJI_MAP with our updated mapping
+        # This ensures the changes persist even if we restart
+        Config.ROLE_EMOJI_MAP = self.role_emoji_mappings.copy()
+
+        # Print debug info to confirm that both variables are synchronized
+        print(f"Role emoji mappings updated:")
+        print(f"Self.role_emoji_mappings: {self.role_emoji_mappings}")
+        print(f"Config.ROLE_EMOJI_MAP: {Config.ROLE_EMOJI_MAP}")
+
+        # Now automatically run the nickname update process
+        # First send a status message
+        status_embed = discord.Embed(
+            title="🔄 Updating Nicknames...",
+            description="Formatting member names with new emoji mapping...",
+            color=Config.EMBED_COLOR_PRIMARY
+        )
+        status_message = await ctx.send(embed=status_embed)
+
+        # Use the same logic as in setupnn but simplified for automatic updates
+        role_emoji_map = self.role_emoji_mappings
         role_names = Config.ROLE_NAMES
-        
+
         # Function to convert text to Unicode bold style
         def to_unicode_bold(text):
             return ''.join(Config.UNICODE_MAP.get(c, c) for c in text)
-        
+
+        # Counters for stats
+        updated_count = 0
+        failed_count = 0
+        skipped_count = 0
+
+        # Process members
+        members = ctx.guild.members
+        total_members = len(members)
+
+        for i, member in enumerate(members):
+            # Skip bots
+            if member.bot:
+                skipped_count += 1
+                continue
+
+            # Get member's roles sorted by position (highest first)
+            member_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
+
+            # Find the highest role that's in our mapping
+            highest_matched_role_id = None
+            for role in member_roles:
+                if role.id in role_emoji_map:
+                    highest_matched_role_id = role.id
+                    break
+
+            # If no matching role found, use default (no emoji)
+            if not highest_matched_role_id:
+                emoji_suffix = ""  # No emoji for default users
+                role_name = "@everyone"
+            else:
+                emoji_suffix = role_emoji_map[highest_matched_role_id]
+                role_name = role_names.get(highest_matched_role_id, "Role")
+
+            # Format the name
+            original_name = member.display_name
+
+            # Clean the name only removing trailing emoji using centralized function
+            clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
+
+            # Convert to Unicode bold style
+            formatted_name = to_unicode_bold(clean_name)
+
+            # Add the role emoji
+            new_name = f"{formatted_name} {emoji_suffix}"
+
+            # Skip if the name is already correctly formatted
+            if member.display_name == new_name:
+                skipped_count += 1
+                continue
+
+            # Update the name
+            try:
+                # Special handling for server owner
+                if member.id == member.guild.owner_id:
+                    # Skip auto-updating the owner in the automatic process
+                    # They will be notified when they manually change their name
+                    skipped_count += 1
+                    continue
+
+                # For regular members
+                await member.edit(nick=new_name)
+                updated_count += 1
+
+                # Update status every 5 members
+                if i % 5 == 0:
+                    status_embed.description = f"Processing... ({i+1}/{total_members})\n\nUpdated: {updated_count}\nSkipped: {skipped_count}\nFailed: {failed_count}"
+                    await status_message.edit(embed=status_embed)
+
+            except Exception:
+                failed_count += 1
+
+            # Small delay to avoid rate limits
+            await asyncio.sleep(0.5)
+
+        # Final status update
+        status_embed.title = "✅ 𝐍𝐈𝐂𝐊𝐍𝐀𝐌𝐄 𝐔𝐏𝐃𝐀𝐓𝐄 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄"
+        status_embed.description = f"**Process complete!**\n\n**Updated:** {updated_count} members\n**Skipped:** {skipped_count} members\n**Failed:** {failed_count} members"
+        status_embed.color = Config.EMBED_COLOR_SUCCESS
+        await status_message.edit(embed=status_embed)
+
+    @commands.command(name="setupnn")
+    # We'll handle permission check inside the function for better error messages
+    async def setupnn(self, ctx):
+        """Set up name formatting based on highest role (admin only)"""
+        # Check if the user has admin roles for this command
+        is_admin = any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles)
+
+        if not is_admin:
+            error_embed = discord.Embed(
+                title="❌ Permission Denied",
+                description="**TANGINA MO, WALA KANG PERMISSION PARA GAMITIN ANG COMMAND NA YAN!**\n\nYou need one of the following roles to run setupnn:\n- 𝐇𝐈𝐆𝐇\n- 𝐓𝐀𝐌𝐎𝐃𝐄𝐑𝐀𝐓𝐎𝐑\n- 𝐊𝐄𝐊𝐋𝐀𝐑𝐒",
+                color=Config.EMBED_COLOR_ERROR
+            )
+            return await ctx.send(embed=error_embed)
+
+        # Use the dynamic role-emoji mappings (which includes any updates from g!roles command)
+        role_emoji_map = self.role_emoji_mappings
+        role_names = Config.ROLE_NAMES
+
+        # Function to convert text to Unicode bold style
+        def to_unicode_bold(text):
+            return ''.join(Config.UNICODE_MAP.get(c, c) for c in text)
+
         # Status message and counter
         status_embed = discord.Embed(
             title="👑 𝐒𝐄𝐓𝐔𝐏𝐍𝐍 - 𝐍𝐀𝐌𝐄 𝐅𝐎𝐑𝐌𝐀𝐓𝐓𝐈𝐍𝐆 👑",
@@ -2082,32 +2758,32 @@ class ChatCog(commands.Cog):
             color=Config.EMBED_COLOR_PRIMARY
         )
         status_message = await ctx.send(embed=status_embed)
-        
+
         # Counters for stats
         updated_count = 0
         failed_count = 0
         skipped_count = 0
-        
+
         # Process members
         members = ctx.guild.members
         total_members = len(members)
-        
+
         for i, member in enumerate(members):
             # Skip bots
             if member.bot:
                 skipped_count += 1
                 continue
-                
+
             # Get member's roles sorted by position (highest first)
             member_roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-            
+
             # Find the highest role that's in our mapping
             highest_matched_role_id = None
             for role in member_roles:
                 if role.id in role_emoji_map:
                     highest_matched_role_id = role.id
                     break
-            
+
             # If no matching role found, use default (no emoji)
             # We'll still convert their name to Unicode bold style
             if not highest_matched_role_id:
@@ -2118,50 +2794,42 @@ class ChatCog(commands.Cog):
                 # Get the emoji for this role
                 emoji = role_emoji_map[highest_matched_role_id]
                 role_name = role_names[highest_matched_role_id]
-            
-            # Format the name - completely rewritten for reliability
+
+            # Format the name
             original_name = member.display_name
-            
-            # Step 1: Remove ALL role emojis from the name, regardless of position
-            clean_name = original_name
-            
-            # Special case for cloud emoji (both variants)
-            clean_name = clean_name.replace("☁️", "").replace("☁", "")
-            
-            # Handle all other emojis from the role map
-            for emoji_value in role_emoji_map.values():
-                # Keep removing this emoji until there are none left
-                while emoji_value in clean_name:
-                    clean_name = clean_name.replace(emoji_value, '')
-            
-            # Step 2: Remove any extra spaces that might be left
-            clean_name = clean_name.strip()
-            
-            # Step 3: Convert to Unicode bold style
+
+            # Clean the name only removing trailing emoji using centralized function
+            clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
+
+            # Convert to Unicode bold style
             formatted_name = to_unicode_bold(clean_name)
-            
+
             # Add the role emoji
             new_name = f"{formatted_name} {emoji}"
-            
+
             # Skip if the name is already correctly formatted
             if member.display_name == new_name:
                 skipped_count += 1
                 continue
-                
+
             # Update the name
             try:
                 # Special handling for server owner in setupnn command
                 if member.id == member.guild.owner_id:
                     # Debug output removed
+
+                    # Get current nickname for more specific message
+                    current_nickname = member.display_name
+
                     owner_embed = discord.Embed(
                         title="👑 Server Owner Nickname Format",
-                        description=f"Hello Server Owner!\n\nI noticed you have the **Owner** role that would give you the 👑 emoji. However, due to Discord's permissions, I can't change your nickname automatically.\n\nIf you'd like to match the server format, please consider updating your nickname to:\n\n**{new_name}**\n\nThis matches your Owner role status.",
+                        description=f"Hello Server Owner!\n\nYour current nickname is **{current_nickname}**.\n\nDue to Discord's permissions, I can't change your nickname automatically. If you'd like to match the server format, please consider updating your nickname to:\n\n**{new_name}**\n\nThis matches your Owner role status with the {emoji} emoji.",
                         color=0xFFD700  # Gold color for owner
                     )
                     try:
                         await member.send(embed=owner_embed)
                         # Debug output removed
-                        
+
                         # Also notify in the channel
                         owner_notify = discord.Embed(
                             title="👑 Server Owner Notification",
@@ -2172,11 +2840,11 @@ class ChatCog(commands.Cog):
                     except Exception as dm_error:
                         # Debug output removed
                         pass
-                    
+
                     # These lines must be at the same indentation level as the try-block
                     skipped_count += 1  # Count this as skipped since we can't edit it
                     continue
-                
+
                 # For regular members
                 await member.edit(nick=new_name)
                 updated_count += 1
@@ -2188,10 +2856,10 @@ class ChatCog(commands.Cog):
             except Exception as e:
                 failed_count += 1
                 # Debug output removed
-                
+
             # Small delay to avoid rate limits
             await asyncio.sleep(0.5)
-        
+
         # Final status update
         status_embed.title = "✅ 𝐍𝐀𝐌𝐄 𝐅𝐎𝐑𝐌𝐀𝐓𝐓𝐈𝐍𝐆 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄"
         status_embed.description = f"**Process complete!**\n\n**Updated:** {updated_count} members\n**Skipped:** {skipped_count} members\n**Failed:** {failed_count} members"
@@ -2202,11 +2870,11 @@ class ChatCog(commands.Cog):
 async def setup(bot):
     """Asynchronous setup function for the cog"""
     cog = ChatCog(bot)
-    
+
     # Set database connection from bot instance
     if hasattr(bot, 'db'):
         cog.db = bot.db
-    
+
     # Await to properly register all commands
     await bot.add_cog(cog)
     print("✅ Chat Cog loaded with await")
