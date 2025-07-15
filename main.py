@@ -346,8 +346,8 @@ def validate_discord_token(token):
     # Accept most reasonable formats
     return True, "Token format seems reasonable"
 
-def main():
-    """Main function to run the bot"""
+async def async_main():
+    """Async main function to run the bot with proper session management"""
     # Check for required environment variables
     if not Config.DISCORD_TOKEN:
         print("❌ Error: Discord token not found in environment variables")
@@ -386,10 +386,13 @@ def main():
             
             if should_wait:
                 print(f"⏳ Rate limit detected. Waiting {wait_time:.1f} seconds before reconnecting...")
-                time.sleep(wait_time + 1)  # Add an extra second for safety
+                await asyncio.sleep(wait_time + 1)  # Add an extra second for safety
             
             print(f"🔄 Attempt {retry_count + 1}/{max_retries}: Connecting to Discord...")
-            bot.run(Config.DISCORD_TOKEN)
+            
+            # Initialize and run bot with proper session handling
+            async with bot:
+                await bot.start(Config.DISCORD_TOKEN)
             
             # If we get here, the bot successfully connected and then disconnected normally
             # Reset rate limit counter
@@ -415,7 +418,7 @@ def main():
                 # If we have more retries, wait and try again
                 if retry_count < max_retries:
                     print(f"⏱️ Waiting {backoff_time:.1f} seconds before retry {retry_count + 1}/{max_retries}...")
-                    time.sleep(backoff_time)
+                    await asyncio.sleep(backoff_time)
                 else:
                     print("❌ Maximum retries reached. Please try again later.")
             else:
@@ -429,9 +432,21 @@ def main():
                 if retry_count < max_retries:
                     wait_time = 5  # simple 5-second wait for non-rate-limit errors
                     print(f"⏱️ Waiting {wait_time} seconds before retry {retry_count + 1}/{max_retries}...")
-                    time.sleep(wait_time)
+                    await asyncio.sleep(wait_time)
                 else:
                     print("❌ Maximum retries reached. Please restart the bot manually.")
+
+def main():
+    """Main function that runs the async bot"""
+    try:
+        # Run the async main function
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\n🛑 Bot shutdown requested by user.")
+    except Exception as e:
+        print(f"❌ Critical error in main: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
