@@ -8,7 +8,7 @@ import sys
 from bot.config import Config
 from bot.cog import ChatCog
 from bot.speech_recognition_cog import SpeechRecognitionCog
-from flask import Flask, render_template, request, jsonify
+from flask import Flask
 import threading
 import datetime
 import random
@@ -64,80 +64,6 @@ def setup_cogs():
 # Setup cogs before starting
 setup_cogs()
 
-# Create Flask app for the workflow
-app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "dev-secret-key")
-
-# Start Discord bot in background thread
-def start_discord_bot():
-    """Start the Discord bot in a background thread"""
-    try:
-        # Check for required environment variables
-        if not Config.DISCORD_TOKEN:
-            print("❌ Error: Discord token not found in environment variables")
-            return
-        
-        # Simple token validation
-        if not Config.DISCORD_TOKEN or len(Config.DISCORD_TOKEN) < 50:
-            print("❌ Error: Invalid Discord token")
-            print("⚠️ Please check your DISCORD_TOKEN environment variable")
-            return
-
-        if not Config.GROQ_API_KEY:
-            print("❌ Error: Groq API key not found in environment variables")
-            return
-            
-        # Check for PyAudio availability
-        if not can_use_audio_features():
-            print("⚠️ Running in text-only mode - voice features disabled")
-            print("⚠️ This is normal when running on Render.com")
-        else:
-            print("✅ Full audio features enabled")
-
-        print("🚀 Starting Discord bot...")
-        bot.run(Config.DISCORD_TOKEN)
-        
-    except Exception as e:
-        print(f"❌ Error starting Discord bot: {e}")
-        import traceback
-        traceback.print_exc()
-
-# Start the Discord bot in a background thread
-discord_thread = threading.Thread(target=start_discord_bot, daemon=True)
-discord_thread.start()
-
-@app.route('/')
-def web_home():
-    """Main route that displays the bot web interface."""
-    try:
-        return render_template('index.html')
-    except Exception as e:
-        return f"✅ GNSLG Bot Web Interface - Bot is running! Error: {str(e)}"
-
-@app.route('/api/chat', methods=['POST'])
-def web_chat():
-    """API endpoint for chat messages."""
-    try:
-        data = request.get_json()
-        message = data.get('message', '')
-        
-        # Placeholder response - the actual bot runs separately
-        response = "GNSLG Bot is running! The Discord bot is active and responding to messages in Discord servers."
-        
-        return jsonify({'response': response})
-    except Exception as e:
-        return jsonify({'error': 'Internal server error'}), 500
-
-@app.route('/status')
-def web_status():
-    """Bot status endpoint."""
-    return jsonify({
-        'status': 'running',
-        'message': 'GNSLG Discord Bot is active',
-        'discord_token': bool(Config.DISCORD_TOKEN),
-        'groq_api_key': bool(Config.GROQ_API_KEY)
-    })
-
 @bot.event
 async def on_ready():
     """Called when the bot is ready"""
@@ -161,13 +87,23 @@ async def on_ready():
         speech_cog = SpeechRecognitionCog(bot)
         speech_cog.db = db  # Pass database instance
         
-        # Use the proper async method for both environments
-        print("🔄 Using proper async add_cog method")
-        await bot.add_cog(chat_cog)
-        print("✅ Chat cog added successfully")
-        
-        await bot.add_cog(speech_cog)
-        print("✅ Speech Recognition cog added successfully")
+        # CRITICAL: Must use different approaches for Render vs Replit
+        if is_render:
+            # Render MUST use await with add_cog
+            print("🔄 Using awaited add_cog for Render compatibility")
+            await bot.add_cog(chat_cog)
+            print("✅ Chat cog added with await for Render")
+            
+            await bot.add_cog(speech_cog)
+            print("✅ Speech Recognition cog added with await for Render")
+        else:
+            # Replit works with non-await version
+            print("🔄 Using direct add_cog for Replit compatibility")
+            bot.add_cog(chat_cog)
+            print("✅ Chat cog added directly for Replit")
+            
+            bot.add_cog(speech_cog)
+            print("✅ Speech Recognition cog added directly for Replit")
         
         # Verify commands are registered properly
         print("🔍 Verifying command registration...")
@@ -346,8 +282,8 @@ def validate_discord_token(token):
     # Accept most reasonable formats
     return True, "Token format seems reasonable"
 
-async def async_main():
-    """Async main function to run the bot with proper session management"""
+def main():
+    """Main function to run the bot"""
     # Check for required environment variables
     if not Config.DISCORD_TOKEN:
         print("❌ Error: Discord token not found in environment variables")
@@ -386,13 +322,10 @@ async def async_main():
             
             if should_wait:
                 print(f"⏳ Rate limit detected. Waiting {wait_time:.1f} seconds before reconnecting...")
-                await asyncio.sleep(wait_time + 1)  # Add an extra second for safety
+                time.sleep(wait_time + 1)  # Add an extra second for safety
             
             print(f"🔄 Attempt {retry_count + 1}/{max_retries}: Connecting to Discord...")
-            
-            # Initialize and run bot with proper session handling
-            async with bot:
-                await bot.start(Config.DISCORD_TOKEN)
+            bot.run(Config.DISCORD_TOKEN)
             
             # If we get here, the bot successfully connected and then disconnected normally
             # Reset rate limit counter
@@ -418,7 +351,7 @@ async def async_main():
                 # If we have more retries, wait and try again
                 if retry_count < max_retries:
                     print(f"⏱️ Waiting {backoff_time:.1f} seconds before retry {retry_count + 1}/{max_retries}...")
-                    await asyncio.sleep(backoff_time)
+                    time.sleep(backoff_time)
                 else:
                     print("❌ Maximum retries reached. Please try again later.")
             else:
@@ -432,21 +365,9 @@ async def async_main():
                 if retry_count < max_retries:
                     wait_time = 5  # simple 5-second wait for non-rate-limit errors
                     print(f"⏱️ Waiting {wait_time} seconds before retry {retry_count + 1}/{max_retries}...")
-                    await asyncio.sleep(wait_time)
+                    time.sleep(wait_time)
                 else:
                     print("❌ Maximum retries reached. Please restart the bot manually.")
-
-def main():
-    """Main function that runs the async bot"""
-    try:
-        # Run the async main function
-        asyncio.run(async_main())
-    except KeyboardInterrupt:
-        print("\n🛑 Bot shutdown requested by user.")
-    except Exception as e:
-        print(f"❌ Critical error in main: {e}")
-        import traceback
-        traceback.print_exc()
 
 if __name__ == "__main__":
     main()

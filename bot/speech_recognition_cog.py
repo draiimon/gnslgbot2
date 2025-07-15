@@ -107,16 +107,29 @@ class SpeechRecognitionCog(commands.Cog):
             await ctx.send("**TANGA KA!** You need to be in a voice channel first!")
             return
         
-        # Connect to the voice channel
+        # Get the voice channel
         voice_channel = ctx.author.voice.channel
-        if ctx.guild.id in self.voice_clients:
+        
+        # Check if bot is already connected via Discord.py's built-in voice client
+        if ctx.guild.voice_client:
             # Already connected, just move to the new channel if needed
-            if self.voice_clients[ctx.guild.id].channel.id != voice_channel.id:
-                await self.voice_clients[ctx.guild.id].move_to(voice_channel)
+            if ctx.guild.voice_client.channel.id != voice_channel.id:
+                await ctx.guild.voice_client.move_to(voice_channel)
+                print(f"✅ Moved to voice channel: {voice_channel.name}")
+            else:
+                print(f"✅ Already connected to {voice_channel.name}")
         else:
-            # Connect to new channel
-            voice_client = await voice_channel.connect()
-            self.voice_clients[ctx.guild.id] = voice_client
+            # Not connected, connect to the voice channel
+            try:
+                voice_client = await voice_channel.connect()
+                print(f"✅ Connected to voice channel: {voice_channel.name}")
+            except Exception as e:
+                print(f"❌ Error connecting to voice channel: {e}")
+                await ctx.send(f"**ERROR!** Cannot connect to voice channel: {e}")
+                return
+        
+        # Update our internal tracking
+        self.voice_clients[ctx.guild.id] = ctx.guild.voice_client
         
         # Start listening
         self.listening_guilds.add(ctx.guild.id)
