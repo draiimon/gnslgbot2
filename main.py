@@ -325,6 +325,15 @@ def main():
                 time.sleep(wait_time + 1)  # Add an extra second for safety
             
             print(f"🔄 Attempt {retry_count + 1}/{max_retries}: Connecting to Discord...")
+            
+            # CRITICAL FIX: Create fresh bot instance for each retry attempt
+            # This prevents "Session is closed" errors in production
+            if retry_count > 0:
+                print("🔄 Creating fresh bot instance for retry...")
+                # Re-initialize the bot with fresh session
+                global bot
+                bot = initialize_bot()
+                
             bot.run(Config.DISCORD_TOKEN)
             
             # If we get here, the bot successfully connected and then disconnected normally
