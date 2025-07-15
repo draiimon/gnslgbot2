@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GNSLG Bot Status</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #121212;
+            color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+            background-color: #1e1e1e;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+            max-width: 500px;
+        }
+        .status {
+            font-size: 32px;
+            font-weight: bold;
+            color: #00ff00;
+            margin-bottom: 20px;
+        }
+        .details {
+            font-size: 18px;
+            color: #cccccc;
+            margin-bottom: 30px;
+        }
+        .footer {
+            font-size: 14px;
+            color: #888;
+            margin-top: 30px;
+        }
+        .indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: #00ff00;
+            border-radius: 50%;
+            margin-right: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="status">
+            <span class="indicator"></span>
+            Bot is live now!
+        </div>
+        <div class="details">
+            GNSLG Discord Bot is running and connected to Discord servers.
+        </div>
+        <div class="footer">
+            Web interface for GNSLG Discord Bot
+        </div>
+    </div>
+</body>
+</html>
