@@ -39,7 +39,7 @@ class Config:
     MAX_CONTEXT_MESSAGES = 10  # Increased for better conversation memory and coherence
 
     # Groq API settings
-    GROQ_MODEL = "openai/gpt-oss-20b"
+    GROQ_MODEL = "qwen/qwen3-32b"
     MAX_TOKENS = 4096  # Keep this to ensure concise responses
     TEMPERATURE = 0.6  # Lowered to be much more coherent and human-like
 
