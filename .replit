@@ -4,7 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["cacert", "ffmpeg-full", "libsodium"]
+packages = ["cacert", "ffmpeg-full", "libsodium", "ffmpeg", "libopus"]
 
 [workflows]
 runButton = "Project"

@@ -1,5 +1,10 @@
 ffmpeg
+libopus0
+libopus-dev
+libsodium23
+libsodium-dev
 libportaudio2
+portaudio19-dev
 libpulse0
 libffi-dev
 libnacl-dev
