@@ -33,7 +33,7 @@ class SpeechRecognitionCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.listening_guilds = set()  # Set of guild IDs that are listening
-        self.recognizer = sr.Recognizer()
+        self.recognizer = sr.Recognizer() if sr else None  # type: ignore
         self.voice_clients = {}  # guild_id: voice_client
         self.tts_queue = {}  # guild_id: list of messages to speak
         self.listening_tasks = {}  # guild_id: asyncio task

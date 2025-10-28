@@ -1,25 +1,48 @@
-discord-py==2.5.2
+# GNSLG Discord Bot - Render Deployment Requirements
+# Generated from pyproject.toml for Docker deployment
+
+# Core Discord bot
+discord.py>=2.6.4
+discord>=2.6.4
+
+# AI and ML
 groq==0.18.0
-pynacl==1.5.0
-python-dotenv==1.0.1
-flask==3.0.0
 openai==1.69.0
-pytz==2025.2
-gtts==2.5.4
-pydub==0.25.1
-psycopg2-binary==2.9.10
-edge-tts==7.0.0
-# PyAudio installed separately in Dockerfile
-pocketsphinx==5.0.4
-speechrecognition==3.14.2
-pytube==15.0.0
-wavelink==3.4.1
-yt-dlp==2025.3.27
-spotipy==2.25.1
+
+# Firebase Database
 firebase-admin==6.5.0
-dnspython==2.6.1
-requests==2.32.3
 google-auth==2.30.0
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.0
+
+# Voice and Audio Processing
+edge-tts==7.0.0
+gtts==2.5.4
+pydub==0.25.1
+SpeechRecognition==3.14.2
+pocketsphinx==5.0.4
+
+# Crypto and Security (must be installed early)
+PyNaCl==1.5.0
+
+# Web Server
+Flask>=3.1.2
+
+# Utilities
+python-dotenv==1.0.1
+requests==2.32.3
 urllib3==2.2.2
+pytz>=2025.2
+psutil>=7.1.2
+
+# Database
+psycopg2-binary==2.9.10
+
+# DNS
+dnspython==2.6.1
+
+# Media downloaders (for future features)
+pytube==15.0.0
+yt-dlp==2025.3.27
+spotipy==2.25.1
+wavelink==3.4.1

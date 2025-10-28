@@ -1,0 +1,42 @@
+# Render Blueprint for GNSLG Discord Bot
+# This file configures automatic deployment to Render
+
+services:
+  - type: web
+    name: gnslg-discord-bot
+    env: docker
+    region: singapore
+    plan: starter
+    
+    # Health check configuration
+    healthCheckPath: /
+    
+    # Environment variables (set these in Render Dashboard)
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false  # Set manually in Render Dashboard
+      
+      - key: GROQ_API_KEY
+        sync: false  # Set manually in Render Dashboard
+      
+      - key: FIREBASE_CREDENTIALS
+        sync: false  # Set manually in Render Dashboard (as JSON string)
+      
+      - key: RENDER
+        value: "true"
+      
+      - key: DISABLE_PYAUDIO
+        value: "false"
+      
+      - key: PORT
+        value: "5000"
+    
+    # Auto-deploy configuration
+    autoDeploy: true
+    
+    # Docker build configuration
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    
+    # Scaling configuration
+    numInstances: 1

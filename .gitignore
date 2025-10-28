@@ -43,6 +43,10 @@ node_modules/
 # Python package management
 uv.lock
 poetry.lock
+# Keep render_requirements.txt for Docker deployment
 
 # Old files from previous versions
 index-old.js
+
+# Attached assets and user uploads
+attached_assets/
