@@ -55,7 +55,15 @@ A comprehensive Discord bot called "GNSLG Bot" that provides AI-powered chat res
 
 ## Recent Changes
 
-### October 28, 2025
+### October 28, 2025 - Latest Update (TTS Improvements)
+- ✅ **Fixed TTS/Voice Issues**: Resolved "Not connected to voice" and WebSocket 4006 errors
+- ✅ **Improved Audio Playback**: Switched from in-memory PCMAudio to FFmpegPCMAudio with temp files
+- ✅ **Added Voice Dependencies**: Installed opus codec, libsodium, and ffmpeg for stable voice connections
+- ✅ **Optimized Dockerfile**: Reorganized with better layer caching and voice dependency verification
+- ✅ **Cleaned Project Structure**: Removed unused files, updated .gitignore, organized codebase
+- ✅ **All 37 Commands Working**: Including g!status, voice commands, and AI chat
+
+### October 28, 2025 - Initial Setup
 - ✅ Cloned repository from https://github.com/draiimon/gnslgbot2
 - ✅ Deleted all previous Node.js bot files
 - ✅ Replaced with Python-based Discord bot
