@@ -140,7 +140,7 @@ class SpeechRecognitionCog(commands.Cog):
         await ctx.send(f"🎤 **GAME NA!** I'm now in **{voice_channel.name}**! Just type g!vc <message> and I'll speak it!")
         
     @commands.command(name="vc", aliases=["speak", "sabihin", "tts"])
-    async def voice_command(self, ctx, *, message: str = None):
+    async def voice_command(self, ctx, *, message: str = None):  # type: ignore
         """Use text-to-speech to speak a message in your voice channel"""
         if not message:
             await ctx.send("**LOKO KA BA?** Tell me what to say!")
@@ -159,7 +159,7 @@ class SpeechRecognitionCog(commands.Cog):
         await ctx.message.add_reaction("🔊")  # React to confirm received
 
     @commands.command()
-    async def listen(self, ctx, *, question: str = None):
+    async def listen(self, ctx, *, question: str = None):  # type: ignore
         """Start listening for voice commands in your current voice channel or ask a direct question"""
         if not ctx.author.voice:
             await ctx.send("**TANGA KA!** You need to be in a voice channel first!")
@@ -362,7 +362,7 @@ class SpeechRecognitionCog(commands.Cog):
             if audio_cog:
                 try:
                     # Update user voice preference in Firebase
-                    self.db.set_user_voice_preference(user_id, gender)
+                    self.db.set_user_voice_preference(user_id, gender)  # type: ignore
                     gender_name = "male" if gender == "m" else "female"
                     
                     # Get the guild and a text channel
@@ -537,8 +537,8 @@ class SpeechRecognitionCog(commands.Cog):
             temp_file = os.path.join(self.temp_dir, f"tts_{timestamp}.mp3")
             
             # Generate TTS audio and save to temporary file
-            tts = edge_tts.Communicate(text=message, voice=voice, rate="+10%", volume="+30%")
-            await tts.save(temp_file)
+            tts = edge_tts.Communicate(text=message, voice=voice, rate="+10%", volume="+30%")  # type: ignore
+            await tts.save(temp_file)  # type: ignore
             
             # Verify voice client is still connected before playing
             if guild_id not in self.voice_clients or not self.voice_clients[guild_id].is_connected():
@@ -650,7 +650,7 @@ class SpeechRecognitionCog(commands.Cog):
         return self.voice_clients[guild_id]
     
     @commands.command(name="autotts", aliases=["ttsauto"])
-    async def autotts(self, ctx, action: str = None):
+    async def autotts(self, ctx, action: str = None):  # type: ignore
         """Toggle automatic text-to-speech for a channel
         
         Usage:
@@ -711,7 +711,7 @@ class SpeechRecognitionCog(commands.Cog):
             
             # Store the preference in Firebase if available
             # Always use Firebase for voice preferences in production mode
-            self.db.set_user_voice_preference(ctx.author.id, normalized_gender)
+            self.db.set_user_voice_preference(ctx.author.id, normalized_gender)  # type: ignore
             print(f"✅ Saved voice preference to Firebase: User {ctx.author.id} preference {normalized_gender}")
             # Connect to voice if needed
             if not ctx.author.voice:
