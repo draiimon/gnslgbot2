@@ -1,7 +1,48 @@
-node_modules/
-.env
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pythonlibs/
+.cache/
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+
+# Firebase credentials (security)
 firebase-credentials.json
-temp_audio/
+
+# Environment variables (security)
+.env
+.env.local
+
+# Temporary files
+temp_audio/*.mp3
+temp_audio/*.wav
+logs/*.log
 *.log
+
+# System files
 .DS_Store
+node_modules/
+
+# Replit specific
+.upm/
+.local/
+
+# Python package management
+uv.lock
+poetry.lock
+
+# Old files from previous versions
 index-old.js
