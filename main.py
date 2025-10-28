@@ -18,6 +18,25 @@ from bot.firebase_db import FirebaseDB
 from bot.runtime_config import can_use_audio_features, is_render_environment
 from bot.rate_limiter import RateLimiter
 
+# Load Opus library for voice support
+if not discord.opus.is_loaded():
+    try:
+        discord.opus.load_opus('libopus.so.0')
+        print("✅ Loaded opus library: libopus.so.0")
+    except Exception as e:
+        try:
+            discord.opus.load_opus('libopus.so')
+            print("✅ Loaded opus library: libopus.so")
+        except Exception as e2:
+            try:
+                discord.opus.load_opus('opus')
+                print("✅ Loaded opus library: opus")
+            except Exception as e3:
+                print(f"⚠️ Could not load opus library manually: {e}, {e2}, {e3}")
+                print("⚠️ Will attempt to use system-loaded opus")
+else:
+    print("✅ Opus library already loaded")
+
 # Initialize bot with command prefix and remove default help command
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=Config.COMMAND_PREFIX, 
