@@ -532,42 +532,47 @@ class SpeechRecognitionCog(commands.Cog):
                 # English voices
                 voice = "en-US-GuyNeural" if gender_preference == "m" else "en-US-JennyNeural"
             
-            # Generate TTS audio in memory
+            # Generate unique filename for this TTS
+            timestamp = int(time.time() * 1000)
+            temp_file = os.path.join(self.temp_dir, f"tts_{timestamp}.mp3")
+            
+            # Generate TTS audio and save to temporary file
             tts = edge_tts.Communicate(text=message, voice=voice, rate="+10%", volume="+30%")
+            await tts.save(temp_file)
             
-            # Create buffer to hold audio data
-            audio_buffer = io.BytesIO()
+            # Verify voice client is still connected before playing
+            if guild_id not in self.voice_clients or not self.voice_clients[guild_id].is_connected():
+                print(f"⚠️ Voice client disconnected, skipping TTS playback")
+                # Clean up temp file
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                return
             
-            # Stream audio data directly to memory
-            async for audio_chunk in tts.stream():
-                if audio_chunk["type"] == "audio":
-                    audio_buffer.write(audio_chunk["data"])
-                    
-            # Reset buffer position for reading
-            audio_buffer.seek(0)
+            # Create FFmpeg audio source with optimized settings for Discord
+            source = discord.FFmpegPCMAudio(
+                temp_file,
+                options='-vn -ar 48000 -ac 2 -b:a 128k'
+            )
             
-            # Create a pydub AudioSegment from the buffer
-            audio_segment = AudioSegment.from_file(audio_buffer, format="mp3")
-            
-            # Convert to WAV format with Discord-compatible settings
-            audio_segment = audio_segment.set_frame_rate(48000).set_channels(2)
-            
-            # Export to a new buffer as WAV
-            output_buffer = io.BytesIO()
-            audio_segment.export(output_buffer, format="wav")
-            output_buffer.seek(0)
-            
-            # Create custom audio source
-            source = discord.PCMAudio(output_buffer)
-            
-            # Play the TTS message
-            self.voice_clients[guild_id].play(
-                source,
-                after=lambda e: asyncio.run_coroutine_threadsafe(
-                    self.after_speaking(e, guild_id, None), 
+            # Play the TTS message with cleanup callback
+            def after_playback(error):
+                if error:
+                    print(f"⚠️ Error in TTS playback: {error}")
+                
+                # Clean up temp file after playback
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except Exception as e:
+                    print(f"⚠️ Error cleaning up temp file: {e}")
+                
+                # Process next message
+                asyncio.run_coroutine_threadsafe(
+                    self.after_speaking(error, guild_id, None),
                     self.bot.loop
                 )
-            )
+            
+            self.voice_clients[guild_id].play(source, after=after_playback)
             
             print(f"✅ Speaking message: {message[:50]}...")
             
