@@ -87,23 +87,13 @@ async def on_ready():
         speech_cog = SpeechRecognitionCog(bot)
         speech_cog.db = db  # Pass database instance
         
-        # CRITICAL: Must use different approaches for Render vs Replit
-        if is_render:
-            # Render MUST use await with add_cog
-            print("🔄 Using awaited add_cog for Render compatibility")
-            await bot.add_cog(chat_cog)
-            print("✅ Chat cog added with await for Render")
-            
-            await bot.add_cog(speech_cog)
-            print("✅ Speech Recognition cog added with await for Render")
-        else:
-            # Replit works with non-await version
-            print("🔄 Using direct add_cog for Replit compatibility")
-            bot.add_cog(chat_cog)
-            print("✅ Chat cog added directly for Replit")
-            
-            bot.add_cog(speech_cog)
-            print("✅ Speech Recognition cog added directly for Replit")
+        # Always use await for add_cog (works for both Render and Replit)
+        print("🔄 Adding cogs with await (universal compatibility)")
+        await bot.add_cog(chat_cog)
+        print("✅ Chat cog added")
+        
+        await bot.add_cog(speech_cog)
+        print("✅ Speech Recognition cog added")
         
         # Verify commands are registered properly
         print("🔍 Verifying command registration...")

@@ -1,12 +1,10 @@
-modules = ["python-3.11"]
+modules = ["python-3.11", "nodejs-20"]
+[agent]
+expertMode = true
 
 [nix]
-channel = "stable-24_05"
-packages = ["cacert", "ffmpeg-full", "libsodium", "openssl", "postgresql"]
-
-[deployment]
-deploymentTarget = "autoscale"
-run = ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
+channel = "stable-25_05"
+packages = ["cacert", "ffmpeg-full", "libsodium"]
 
 [workflows]
 runButton = "Project"
@@ -18,17 +16,24 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Start application"
+args = "Discord Bot"
 
 [[workflows.workflow]]
-name = "Start application"
+name = "Discord Bot"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "gunicorn --bind 0.0.0.0:5000 --reuse-port --reload main:app"
+args = "python main.py"
 waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 42343
+externalPort = 3000

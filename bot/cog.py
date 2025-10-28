@@ -2156,6 +2156,42 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
         status = "ON" if new_state else "OFF"
         await ctx.send(f"**MAINTENANCE MODE NOW:** `{status}`")
 
+    @commands.command(name="status")
+    @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles) if Config.ADMIN_ROLE_IDS else ctx.author.guild_permissions.administrator)
+    async def status(self, ctx, *, status_text: str = None):
+        """Set or view the bot's custom status message (admin only)
+        
+        Usage:
+        g!status - View current status
+        g!status <message> - Set new status
+        """
+        # If no status text provided, show current status
+        if not status_text:
+            current_activity = None
+            if self.bot.activity:
+                current_activity = self.bot.activity
+            
+            if current_activity:
+                # Get the activity details
+                activity_type = str(current_activity.type).replace('ActivityType.', '')
+                activity_name = current_activity.name if hasattr(current_activity, 'name') else str(current_activity)
+                
+                await ctx.send(f"**CURRENT STATUS:** `{activity_name}`\n**TYPE:** `{activity_type}`")
+            else:
+                await ctx.send("**WALANG STATUS!** Use `g!status <message>` to set one!")
+            return
+        
+        # Set the new status
+        try:
+            await self.bot.change_presence(
+                activity=discord.CustomActivity(name=status_text)
+            )
+            await ctx.send(f"✅ **BOT STATUS UPDATED!**\n**NEW STATUS:** `{status_text}`")
+            print(f"✅ Bot status updated to: {status_text}")
+        except Exception as e:
+            await ctx.send(f"**ERROR:** Failed to update status: {str(e)}")
+            print(f"❌ Error updating bot status: {e}")
+
     # Auto unmute users after a timeout for violations
     async def auto_unmute_user(self, user_id, seconds):
         """Automatically unmute a user after specified seconds"""

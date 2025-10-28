@@ -1,0 +1,7 @@
+node_modules/
+.env
+firebase-credentials.json
+temp_audio/
+*.log
+.DS_Store
+index-old.js
