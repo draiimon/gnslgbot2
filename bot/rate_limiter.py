@@ -15,11 +15,11 @@ class RateLimiter:
         # Tracking the last time we encountered a rate limit
         self.last_rate_limit = 0
         
-        # Current backoff time in seconds (starts at 5s, exponentially increases)
-        self.current_backoff = 5
+        # Current backoff time in seconds (starts at 60s to be safe)
+        self.current_backoff = 60
         
-        # Maximum backoff time in seconds (15 minutes)
-        self.max_backoff = 15 * 60
+        # Maximum backoff time in seconds (30 minutes)
+        self.max_backoff = 30 * 60
         
         # Flag to indicate if we're currently in a backoff state
         self.is_backing_off = False
@@ -37,15 +37,15 @@ class RateLimiter:
         self.is_backing_off = True
         
         # Calculate exponential backoff with jitter (randomization)
-        # Base: 5s, 10s, 20s, 40s, 80s, 160s, 320s, 640s, 900s (15min max)
+        # Base: 60s, 120s, 240s...
         self.current_backoff = min(
             self.current_backoff * 2,
             self.max_backoff
         )
         
-        # Add jitter (±10%) to prevent thundering herd problem
-        jitter = random.uniform(-0.1, 0.1) * self.current_backoff
-        self.current_backoff = max(5, self.current_backoff + jitter)
+        # Add jitter (10-20%) to prevent thundering herd problem
+        jitter = random.uniform(0.1, 0.2) * self.current_backoff
+        self.current_backoff = max(60, self.current_backoff + jitter)
         
         self.logger.warning(
             f"Rate limit encountered ({self.consecutive_limits} consecutive). "
@@ -81,7 +81,7 @@ class RateLimiter:
             self.logger.info("Rate limiting state reset - operations successful")
         
         self.consecutive_limits = 0
-        self.current_backoff = 5
+        self.current_backoff = 60
         self.is_backing_off = False
     
     def get_status(self):
