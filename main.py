@@ -234,61 +234,63 @@ def main():
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Run the bot with intelligent retry and backoff
-    max_retries = 3
-    retry_count = 0
-    
-    # Initialize RateLimiter outside the loop to persist state across retries
-    # (Although GinsilogBot has its own, this one is for the connection loop)
+    # Initialize RateLimiter
     connection_limiter = RateLimiter()
     
-    while retry_count < max_retries:
+    # "Ultimate Fix" Retry Loop
+    print("🚀 Starting GNSLG Bot with ULTIMATE RETRY LOGIC")
+    retry_count = 0
+    
+    while True:
         try:
             # Check if we need to wait due to rate limiting
             should_wait, wait_time = connection_limiter.check_backoff()
             
             if should_wait:
-                print(f"⏳ Rate limit detected. Waiting {wait_time:.1f} seconds before reconnecting...")
-                time.sleep(wait_time + 1)
+                print(f"⏳ Rate limit active. Waiting {wait_time:.1f} seconds...")
+                time.sleep(wait_time + 5) # Extra buffer
             
-            print(f"🔄 Attempt {retry_count + 1}/{max_retries}: Connecting to Discord...")
+            print(f"🔄 Connection Attempt {retry_count + 1}...")
             
             # Create a FRESH bot instance for every attempt
             bot = GinsilogBot()
             bot.run(Config.DISCORD_TOKEN)
             
-            # If run() returns, it means the bot disconnected gracefully (unlikely with .run)
-            # or connection was closed.
+            # If we get here, the bot disconnected gracefully
+            print("✅ Bot disconnected gracefully.")
+            # Reset rate limiter on successful run duration (if needed)
             break
             
+        except discord.errors.LoginFailure:
+            print("❌ FATAL: Invalid Discord Token. Please check your .env file.")
+            return # Exit immediately, do not retry invalid tokens
+            
+        except discord.errors.HTTPException as e:
+            retry_count += 1
+            print(f"❌ HTTP Error: {e}")
+            
+            if e.status == 429 or "Too Many Requests" in str(e):
+                print("🛑 HIT DISCORD RATE LIMIT (429)!")
+                backoff = connection_limiter.record_rate_limit()
+                print(f"🛑 Sleeping for {backoff:.1f} seconds to respect rate limit...")
+                time.sleep(backoff)
+            else:
+                print("⚠️ HTTP Exception (non-429). Waiting 10s...")
+                time.sleep(10)
+                
         except Exception as e:
             retry_count += 1
             error_message = str(e).lower()
-            
             print(f"❌ Error running bot: {e}")
-            print("⚠️ Error details:")
-            import traceback
-            traceback.print_exc()
             
-            # Check if this is a rate limiting issue
-            if "rate limit" in error_message or "cloudflare" in error_message or "429" in error_message or "403" in error_message:
-                backoff_time = connection_limiter.record_rate_limit()
-                print(f"\n⏳ Rate limit detected. Backing off for {backoff_time:.1f} seconds...")
-                if retry_count < max_retries:
-                    time.sleep(backoff_time)
+            # Check for Cloudflare/Rate Limit keywords
+            if "rate limit" in error_message or "cloudflare" in error_message or "403" in error_message:
+                backoff = connection_limiter.record_rate_limit()
+                print(f"🛑 Cloudflare/Rate Limit detected. BACKING OFF for {backoff:.1f} seconds...")
+                time.sleep(backoff)
             else:
-                print("\n🔍 Common issues:")
-                print("- Network connectivity issues")
-                print("- Invalid Discord token")
-                print("- Discord API outage")
-                
-                if retry_count < max_retries:
-                    wait_time = 5
-                    print(f"⏱️ Waiting {wait_time} seconds before retry...")
-                    time.sleep(wait_time)
-
-    if retry_count >= max_retries:
-        print("❌ Maximum retries reached. Please restart the bot manually.")
+                print("⚠️ Unexpected error. Retrying in 10s...")
+                time.sleep(10)
 
 if __name__ == "__main__":
     main()
