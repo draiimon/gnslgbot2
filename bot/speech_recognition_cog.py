@@ -103,13 +103,15 @@ class VoiceSink(AudioSinkBase):
                     self.silence_duration += 0.02  # Each chunk is 20ms
                     self.audio_data.extend(data.pcm)
                     
+                    
                     # Debug: Log silence progress every 0.5s
                     if self.silence_duration >= self.last_silence_log + 0.5:
-                        print(f"⏱️ Silence: {self.silence_duration:.1f}s (need 2.0s to process)")
+                        print(f"⏱️ Silence: {self.silence_duration:.1f}s (need 0.8s to process)")
                         self.last_silence_log = self.silence_duration
                     
-                    # If silence is long enough, process the audio
-                    if self.silence_duration > 2.0:  # 2.0 seconds of silence (reduced from 3.0s for faster response)
+                    # Modern VAD: Shorter silence threshold for natural conversation (like ChatGPT 2026)
+                    # 0.8s is enough to detect end of sentence without long awkward pauses
+                    if self.silence_duration > 0.8:  # 800ms silence - modern voice detection!
                         self.is_speaking = False  # Reset flag BEFORE processing
                         
                         # Only process if not already processing (prevents queue buildup)
