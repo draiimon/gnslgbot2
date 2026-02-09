@@ -6,7 +6,12 @@ import time
 import json
 import threading
 import subprocess
+import logging
 from bot.runtime_config import can_use_audio_features
+
+# Suppress noisy voice_recv logs BEFORE importing the library
+logging.getLogger('discord.ext.voice_recv.reader').setLevel(logging.WARNING)
+logging.getLogger('discord.ext.voice_recv.opus').setLevel(logging.WARNING)
 
 # Conditionally import PyAudio-dependent modules
 try:
@@ -32,11 +37,6 @@ from discord.ext import commands  # Make sure we always have commands
 from groq import Groq
 import wave
 import collections
-import logging
-
-# Suppress noisy voice_recv logs to prevent spam
-logging.getLogger('discord.ext.voice_recv.reader').setLevel(logging.WARNING)
-logging.getLogger('discord.ext.voice_recv.opus').setLevel(logging.WARNING)
 
 
 # Define base class handling for when dependency is missing
