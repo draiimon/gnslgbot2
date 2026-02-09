@@ -44,7 +44,7 @@ class VoiceSink(AudioSinkBase):
         self.cog = cog
         self.guild_id = guild_id
         self.buffer = collections.deque(maxlen=1000)  # ~20 seconds of audio
-        self.silence_threshold = 500  # Adjust based on testing
+        self.silence_threshold = 2000  # Increased to reduce false positives from background noise
         self.silence_duration = 0.0
         self.is_speaking = False
         self.audio_data = bytearray()
@@ -114,7 +114,8 @@ class VoiceSink(AudioSinkBase):
             traceback.print_exc()
 
     async def process_audio(self, user, audio_data):
-        if len(audio_data) < 48000:  # Ignore very short clips (< 0.5s)
+        if len(audio_data) < 96000:  # Ignore very short clips (<1.0s) - increased to reduce hallucinations
+            print(f"⏭️ Skipping short audio clip ({len(audio_data)} bytes)")
             return
             
         self.processing = True
@@ -141,6 +142,7 @@ class VoiceSink(AudioSinkBase):
                             model="whisper-large-v3",
                             temperature=0,
                             response_format="verbose_json",
+                            prompt="",  # Empty prompt to reduce hallucinations
                         )
                         text = transcription.text.strip()
                         print(f"📝 Transcription: '{text}'")
