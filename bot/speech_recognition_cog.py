@@ -14,18 +14,150 @@ try:
         import speech_recognition as sr
         import edge_tts
         from pydub import AudioSegment
+        from discord.ext import voice_recv
     else:
         # Create dummy imports for render compatibility
         sr = None
         edge_tts = None
         AudioSegment = None
+        voice_recv = None
 except ImportError:
     print("⚠️ Speech recognition dependencies not available")
     sr = None
     edge_tts = None
     AudioSegment = None
+    voice_recv = None
 
 from discord.ext import commands  # Make sure we always have commands
+from groq import Groq
+import wave
+import collections
+
+# Define base class handling for when dependency is missing
+AudioSinkBase = voice_recv.AudioSink if voice_recv else object
+
+class VoiceSink(AudioSinkBase):
+    def __init__(self, cog, guild_id):
+        if not voice_recv:
+            return
+            
+        self.cog = cog
+        self.guild_id = guild_id
+        self.buffer = collections.deque(maxlen=1000)  # ~20 seconds of audio
+        self.silence_threshold = 500  # Adjust based on testing
+        self.silence_duration = 0.0
+        self.is_speaking = False
+        self.audio_data = bytearray()
+        self.last_speech_time = time.time()
+        self.processing = False
+        self.sample_width = 2
+        self.channels = 2
+        self.sample_rate = 48000
+
+    def wants_opus(self):
+        return False
+
+    def write(self, user, data):
+        if self.processing:
+            return
+
+        # Simple energy-based silence detection
+        # This is a very basic implementation
+        # For production, we might want to use webrtcvad
+        
+        # Convert PCM data to potential energy level
+        try:
+            # Check maximum amplitude in this chunk
+            max_amp = 0
+            for i in range(0, len(data.pcm), 2):
+                sample = int.from_bytes(data.pcm[i:i+2], byteorder='little', signed=True)
+                max_amp = max(max_amp, abs(sample))
+            
+            if max_amp > self.silence_threshold:
+                if not self.is_speaking:
+                    self.is_speaking = True
+                    # print(f"🗣️ Speech detected from {user}")
+                
+                self.silence_duration = 0
+                self.audio_data.extend(data.pcm)
+                self.last_speech_time = time.time()
+            else:
+                if self.is_speaking:
+                    self.silence_duration += 0.02  # Each chunk is 20ms
+                    self.audio_data.extend(data.pcm)
+                    
+                    # If silence is long enough, process the audio
+                    if self.silence_duration > 1.5:  # 1.5 seconds of silence
+                        self.is_speaking = False
+                        asyncio.create_task(self.process_audio(user))
+                        self.audio_data = bytearray()
+                        
+        except Exception as e:
+            print(f"Error in write: {e}")
+
+    async def process_audio(self, user):
+        if len(self.audio_data) < 48000:  # Ignore very short clips (< 0.5s)
+            return
+            
+        self.processing = True
+        try:
+            # Save to temporary wav file
+            timestamp = int(time.time() * 1000)
+            filename = os.path.join(self.cog.temp_dir, f"recording_{self.guild_id}_{timestamp}.wav")
+            
+            with wave.open(filename, 'wb') as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(self.sample_width)
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(self.audio_data)
+                
+            # Transcribe with Groq
+            if self.cog.groq_client:
+                # Transcribe
+                print(f"🎤 Transcribing audio for guild {self.guild_id}...")
+                with open(filename, "rb") as file:
+                    try:
+                        transcription = await asyncio.to_thread(
+                            self.cog.groq_client.audio.transcriptions.create,
+                            file=(filename, file.read()),
+                            model="whisper-large-v3",
+                            temperature=0,
+                            response_format="verbose_json",
+                        )
+                        text = transcription.text.strip()
+                        print(f"📝 Transcription: '{text}'")
+                        
+                        if text and len(text) > 2:  # Ignore empty or very short transcriptions
+                            # Check if user said "stop" or "cancel"
+                            if text.lower() in ["stop", "cancel", "hinto", "tigil", "tama na"]:
+                                await self.cog.speak_message(self.guild_id, "Okay, stopping conversation.")
+                                # We'll handle stopping in the cog
+                                if self.guild_id in self.cog.listening_guilds:
+                                    self.cog.listening_guilds.discard(self.guild_id)
+                                    # Disconnect logic...
+                            else:
+                                # Process as a question
+                                await self.cog.handle_voice_command(self.guild_id, user.id if user else 0, text)
+                                
+                    except Exception as e:
+                        if "429" in str(e):
+                            print("⚠️ Groq Rate Limit Reached")
+                            await self.cog.speak_message(self.guild_id, "Rate limit reached. Please wait a moment.")
+                        else:
+                            print(f"❌ Groq Error: {e}")
+            
+            # Cleanup
+            if os.path.exists(filename):
+                os.remove(filename)
+                
+        except Exception as e:
+            print(f"Error processing audio: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.processing = False
+            self.audio_data = bytearray()
+
 
 class SpeechRecognitionCog(commands.Cog):
     """Cog for handling speech recognition and voice interactions"""
@@ -62,6 +194,14 @@ class SpeechRecognitionCog(commands.Cog):
         # Get Groq client from the bot (assuming it's stored there)
         self.get_ai_response = None  # This will be set when the cog is loaded
         
+        # Initialize Groq client
+        try:
+            self.groq_client = Groq()
+            print("✅ Groq client initialized for STT")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize Groq client: {e}")
+            self.groq_client = None
+        
         # We'll start our connection monitor task in on_ready instead of here
         # This fixes the "loop attribute cannot be accessed in non-async contexts" error
         
@@ -82,22 +222,14 @@ class SpeechRecognitionCog(commands.Cog):
         if not self.get_ai_response:
             print("❌ Could not find AI response handler - AI responses won't work!")
             
-        # Verify all commands are properly registered
-        if not self.commands_checked:
-            print("🔍 Verifying command registration...")
-            cmd_count = 0
-            for cmd in self.bot.commands:
-                cmd_count += 1
-                if cmd.cog_name == self.__class__.__name__:
-                    print(f"  ✅ Command registered: {cmd.name} (aliases: {cmd.aliases})")
-            print(f"✅ Total bot commands found: {cmd_count}")
-            self.commands_checked = True
-            
         # Start the voice connection monitor task (moved from __init__ to fix Render deployment)
         if not self.monitor_task or self.monitor_task.done():
             print("🔄 Starting voice connection monitor task...")
             self.monitor_task = asyncio.create_task(self.monitor_voice_connections())
             print("✅ Voice connection monitor started")
+
+
+
     
     @commands.command(name="joinvc", aliases=["join", "summon"])
     async def joinvc(self, ctx):
@@ -121,7 +253,10 @@ class SpeechRecognitionCog(commands.Cog):
         else:
             # Not connected, connect to the voice channel
             try:
-                voice_client = await voice_channel.connect()
+                if voice_recv:
+                    voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                else:
+                    voice_client = await voice_channel.connect()
                 print(f"✅ Connected to voice channel: {voice_channel.name}")
             except Exception as e:
                 print(f"❌ Error connecting to voice channel: {e}")
@@ -173,8 +308,16 @@ class SpeechRecognitionCog(commands.Cog):
                 await self.voice_clients[ctx.guild.id].move_to(voice_channel)
         else:
             # Connect to new channel
-            voice_client = await voice_channel.connect()
-            self.voice_clients[ctx.guild.id] = voice_client
+            try:
+                if voice_recv:
+                    voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                else:
+                    voice_client = await voice_channel.connect()
+                self.voice_clients[ctx.guild.id] = voice_client
+            except Exception as e:
+                print(f"❌ Error connecting in listen command: {e}")
+                await ctx.send(f"❌ Error connecting: {e}")
+                return
         
         # Start listening
         self.listening_guilds.add(ctx.guild.id)
@@ -202,7 +345,7 @@ class SpeechRecognitionCog(commands.Cog):
         # await self.speak_message(ctx.guild.id, "Ginslog Bot is now listening! Just type your message in chat and I'll respond!")
     
     async def start_listening_for_speech(self, ctx):
-        """Listen for voice commands using a Discord-compatible approach"""
+        """Listen for voice commands using discord-ext-voice-recv"""
         guild_id = ctx.guild.id
         
         # Set up the voice channel
@@ -213,18 +356,35 @@ class SpeechRecognitionCog(commands.Cog):
         # Log that we're starting to listen
         print(f"🎧 Starting voice listening in {voice_channel.name} for guild {guild_id}")
         
-        # No confirmation message needed - keep interaction clean and simple
+        # Connect if not connected
+        vc = await self._ensure_voice_connection(voice_channel)
         
-        # In listening mode, just keep the task alive to maintain the connection
-        while guild_id in self.listening_guilds:
-            try:
-                # Just keep the task alive and monitor the voice channel
-                await asyncio.sleep(60)
-            except Exception as e:
-                print(f"⚠️ Error in listening task: {e}")
-                await asyncio.sleep(10)
-        
-        print(f"🛑 Stopped listening in guild {guild_id}")
+        try:
+            # Check if voice_recv is available
+            if not voice_recv:
+                print("❌ discord-ext-voice-recv not available")
+                await ctx.send("❌ Voice receiving is not available on this host.")
+                return
+
+            # Start receiving
+            sink = VoiceSink(self, guild_id)
+            vc.listen(sink)
+            print(f"✅ Voice receiving started for guild {guild_id}")
+            
+            # Keep the task alive
+            while guild_id in self.listening_guilds:
+                if not vc.is_connected():
+                    break
+                await asyncio.sleep(1)
+                
+        except Exception as e:
+            print(f"⚠️ Error in listening task: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            print(f"🛑 Stopped listening in guild {guild_id}")
+            # We don't stop listening explicitly here because the vc might be used for other things
+            # But if we were truly done, we would call vc.stop_listening()
     
     @commands.command(name="leave", aliases=["disconnect", "dc", "bye"])
     async def leave(self, ctx):
@@ -245,7 +405,7 @@ class SpeechRecognitionCog(commands.Cog):
         else:
             await ctx.send("**TANGA KA BA?** I'm not in any voice channel.")
     
-    @commands.command()
+    @commands.command(name="stoplisten", aliases=["stop"])
     async def stoplisten(self, ctx):
         """Stop listening for voice commands"""
         if ctx.guild.id in self.listening_guilds:
@@ -435,7 +595,7 @@ class SpeechRecognitionCog(commands.Cog):
             traceback.print_exc()
             await self.speak_message(guild_id, "Sorry, I encountered an error processing your request.")
     
-    async def speak_message(self, guild_id, message):
+    async def speak_message(self, guild_id, message, user_id=None):
         """Use TTS to speak a message in the voice channel using in-memory processing"""
         # Check if we're connected to voice and try to reconnect if needed
         if guild_id not in self.voice_clients or not self.voice_clients[guild_id].is_connected():
@@ -463,7 +623,9 @@ class SpeechRecognitionCog(commands.Cog):
         # Add to the queue
         if guild_id not in self.tts_queue:
             self.tts_queue[guild_id] = []
-        self.tts_queue[guild_id].append(message)
+        
+        # Store as tuple (message, user_id)
+        self.tts_queue[guild_id].append((message, user_id))
         
         # Process the queue if we're not already speaking
         if not self.voice_clients[guild_id].is_playing():
@@ -477,7 +639,14 @@ class SpeechRecognitionCog(commands.Cog):
             return
         
         # Get the next message
-        message = self.tts_queue[guild_id].pop(0)
+        item = self.tts_queue[guild_id].pop(0)
+        
+        # Handle both old string format (if any lingering) and new tuple format
+        if isinstance(item, tuple):
+            message, user_id = item
+        else:
+            message = item
+            user_id = None
         
         # Normalize text to handle fancy fonts
         try:
@@ -515,15 +684,16 @@ class SpeechRecognitionCog(commands.Cog):
                         print(f"Error accessing audio cog: {e}")
                         break
             
-            # Determine user from guild context
-            current_user_id = None
-            for guild in self.bot.guilds:
-                if guild.id == guild_id:
-                    # Find the most active voice user
-                    for member in guild.members:
-                        if member.id in self.last_user_speech:
-                            current_user_id = member.id
-                            break
+            # Determine user from guild context or explicit user_id
+            current_user_id = user_id
+            if not current_user_id:
+                for guild in self.bot.guilds:
+                    if guild.id == guild_id:
+                        # Find the most active voice user
+                        for member in guild.members:
+                            if member.id in self.last_user_speech:
+                                current_user_id = member.id
+                                break
             
             # Get gender preference from Firebase, fallback to default
             gender_preference = "f"  # Default to female
@@ -533,6 +703,7 @@ class SpeechRecognitionCog(commands.Cog):
                 try:
                     # Get voice preference from Firebase
                     gender_preference = self.db.get_user_voice_preference(current_user_id)
+                    # print(f"DEBUG: Using voice preference '{gender_preference}' for user {current_user_id}")
                 except Exception as e:
                     print(f"⚠️ Error getting voice preference from Firebase: {e}")
                     # Fallback to default
@@ -632,7 +803,10 @@ class SpeechRecognitionCog(commands.Cog):
             else:
                 # No connection exists anywhere, create a new one
                 try:
-                    voice_client = await voice_channel.connect()
+                    if voice_recv:
+                        voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                    else:
+                        voice_client = await voice_channel.connect()
                     self.voice_clients[guild_id] = voice_client
                 except discord.errors.ClientException as e:
                     # If we get "already connected" error, try to find and use the existing connection
@@ -650,7 +824,10 @@ class SpeechRecognitionCog(commands.Cog):
                                 if vc.guild.id == guild_id:
                                     await vc.disconnect(force=True)
                             # Now try connecting again
-                            voice_client = await voice_channel.connect()
+                            if voice_recv:
+                                voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                            else:
+                                voice_client = await voice_channel.connect()
                             self.voice_clients[guild_id] = voice_client
                     else:
                         # Some other error, re-raise
@@ -687,8 +864,8 @@ class SpeechRecognitionCog(commands.Cog):
             traceback.print_exc()
     
     @commands.command(name="ask")
-    async def ask(self, ctx, *, question: str):
-        """Quick voice response to a question (no need for g!joinvc first)"""
+    async def ask(self, ctx, *, question: str = None):
+        """Quick voice response to a question or start listening mode"""
         try:
             # Check if user is in a voice channel
             if not ctx.author.voice:
@@ -701,8 +878,26 @@ class SpeechRecognitionCog(commands.Cog):
             # No join message or acknowledgement, just connect
             await self._ensure_voice_connection(voice_channel)
             
-            # Process and answer the question directly - ultra clean flow
-            await self.handle_voice_command(ctx.guild.id, ctx.author.id, question)
+            if question:
+                # Process and answer the question directly - ultra clean flow
+                await self.handle_voice_command(ctx.guild.id, ctx.author.id, question)
+            else:
+                # Start continuous listening mode (like g!listen)
+                
+                # Start listening
+                self.listening_guilds.add(ctx.guild.id)
+                if ctx.guild.id not in self.tts_queue:
+                    self.tts_queue[ctx.guild.id] = []
+                    
+                # Inform user
+                await ctx.send(f"🎤 **GAME NA!** I'm listening in **{voice_channel.name}**! Just speak and I'll respond! (Type `g!stop` to end)")
+                
+                # Start listening for audio (in a separate task)
+                if ctx.guild.id in self.listening_tasks and not self.listening_tasks[ctx.guild.id].done():
+                    self.listening_tasks[ctx.guild.id].cancel()
+                
+                # Create a new listening task for this guild
+                self.listening_tasks[ctx.guild.id] = asyncio.create_task(self.start_listening_for_speech(ctx))
             
         except Exception as e:
             await ctx.send(f"❌ **ERROR:** {str(e)}")
@@ -736,7 +931,7 @@ class SpeechRecognitionCog(commands.Cog):
             
             # Confirm the change via voice message
             await ctx.send(f"**VOICE CHANGED TO {gender_name.upper()}!** 👨 🔊")
-            await self.speak_message(ctx.guild.id, f"Voice changed to {gender_name}. This is how I sound now!")
+            await self.speak_message(ctx.guild.id, f"Voice changed to {gender_name}. This is how I sound now!", user_id=ctx.author.id)
             
         except Exception as e:
             await ctx.send(f"❌ **ERROR:** {str(e)}")

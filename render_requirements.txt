@@ -2,7 +2,9 @@
 # Generated from pyproject.toml for Docker deployment
 
 # Core Discord bot
+# Core Discord bot
 discord.py>=2.6.4
+discord-ext-voice-recv>=0.1.5
 
 # AI and ML
 groq==0.18.0
