@@ -7,6 +7,10 @@ import json
 import threading
 import subprocess
 import logging
+import wave
+import collections
+from discord.ext import commands
+from groq import Groq
 from bot.runtime_config import can_use_audio_features
 
 # Suppress noisy voice_recv logs BEFORE importing the library
@@ -695,6 +699,11 @@ class SpeechRecognitionCog(commands.Cog):
         if guild_id not in self.tts_queue:
             self.tts_queue[guild_id] = []
         
+        # Limit queue size to prevent memory issues and lag
+        if len(self.tts_queue[guild_id]) >= 5:
+            self.tts_queue[guild_id].pop(0)  # Remove oldest message
+            print(f"⚠️ TTS queue full for guild {guild_id}, dropped oldest message")
+
         # Store as tuple (message, user_id)
         self.tts_queue[guild_id].append((message, user_id))
         
@@ -942,6 +951,7 @@ class SpeechRecognitionCog(commands.Cog):
             traceback.print_exc()
     
     @commands.command(name="ask")
+    @commands.cooldown(1, 3, commands.BucketType.user)  # Rate limit: 1 use every 3 seconds
     async def ask(self, ctx, *, question: str = None):
         """Quick voice response to a question or start listening mode"""
         try:
@@ -1016,6 +1026,7 @@ class SpeechRecognitionCog(commands.Cog):
             traceback.print_exc()
             
     @commands.command(name="change")
+    @commands.cooldown(1, 2, commands.BucketType.user)  # Rate limit: 1 use every 2 seconds
     async def change_voice(self, ctx, gender: str):
         """Change the bot's voice to male (m) or female (f)"""
         try:
