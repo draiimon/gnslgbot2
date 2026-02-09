@@ -814,36 +814,43 @@ class SpeechRecognitionCog(commands.Cog):
                     await voice_client.move_to(voice_channel)
             else:
                 # No connection exists anywhere, create a new one
-                try:
-                    if voice_recv:
-                        voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
-                    else:
-                        voice_client = await voice_channel.connect()
-                    self.voice_clients[guild_id] = voice_client
-                except discord.errors.ClientException as e:
-                    # If we get "already connected" error, try to find and use the existing connection
-                    if "Already connected" in str(e):
-                        print(f"⚠️ Error connecting: {e}, attempting to find existing connection")
-                        voice_client = guild.voice_client
-                        if voice_client:
-                            self.voice_clients[guild_id] = voice_client
-                            # Move to requested channel
-                            if voice_client.channel.id != voice_channel.id:
-                                await voice_client.move_to(voice_channel)
+                # Implement retry logic for connection stability
+                for attempt in range(3):
+                    try:
+                        print(f"🔄 Connecting to voice channel (attempt {attempt+1}/3)...")
+                        if voice_recv:
+                            # Use a generous timeout for the connection
+                            voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient, timeout=20.0, reconnect=True)
                         else:
-                            # If all else fails, force disconnect and try again
+                            voice_client = await voice_channel.connect(timeout=20.0, reconnect=True)
+                        
+                        self.voice_clients[guild_id] = voice_client
+                        print(f"✅ Successfully connected to voice channel on attempt {attempt+1}")
+                        break
+                    except Exception as e:
+                        print(f"⚠️ Connection attempt {attempt+1} failed: {e}")
+                        
+                        # Clean up any partial connection
+                        try:
+                            # Try to disconnect using the guild's voice_client reference
+                            if guild.voice_client:
+                                await guild.voice_client.disconnect(force=True)
+                            
+                            # Also try cleaning up from bot's voice_clients list
                             for vc in self.bot.voice_clients:
                                 if vc.guild.id == guild_id:
                                     await vc.disconnect(force=True)
-                            # Now try connecting again
-                            if voice_recv:
-                                voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
-                            else:
-                                voice_client = await voice_channel.connect()
-                            self.voice_clients[guild_id] = voice_client
-                    else:
-                        # Some other error, re-raise
-                        raise
+                        except Exception as cleanup_error:
+                            print(f"⚠️ Cleanup error during retry: {cleanup_error}")
+                            
+                        if attempt < 2:
+                            wait_time = (attempt + 1) * 2
+                            print(f"⏳ Waiting {wait_time}s before retry...")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            print("❌ All connection attempts failed.")
+                            raise e
+
         
         # Initialize TTS queue if needed
         if guild_id not in self.tts_queue:
