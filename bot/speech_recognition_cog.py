@@ -32,6 +32,12 @@ from discord.ext import commands  # Make sure we always have commands
 from groq import Groq
 import wave
 import collections
+import logging
+
+# Suppress noisy voice_recv logs to prevent spam
+logging.getLogger('discord.ext.voice_recv.reader').setLevel(logging.WARNING)
+logging.getLogger('discord.ext.voice_recv.opus').setLevel(logging.WARNING)
+
 
 # Define base class handling for when dependency is missing
 AudioSinkBase = voice_recv.AudioSink if voice_recv else object
