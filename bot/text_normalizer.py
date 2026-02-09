@@ -3,6 +3,8 @@ Utility for normalizing text, specifically converting fancy unicode characters
 to their ASCII equivalents for better TTS pronunciation.
 """
 
+import re
+
 # Mapping of fancy unicode characters to standard ASCII
 UNICODE_MAP = {
     # Bold Uppercase
@@ -97,13 +99,21 @@ def normalize_text(text: str) -> str:
     if not text:
         return ""
         
+    # Remove emojis using regex
+    # Covers: Emoticons, Transport/Map, Enclosed Alphanumeric, Dingbats, Formatting, etc.
+    if text:
+        text = re.sub(r'[\U00010000-\U0010ffff]', '', text)  # Supplementary Multilingual Plane (Most Emojis)
+        text = re.sub(r'[\u2700-\u27bf]', '', text)  # Dingbats
+        text = re.sub(r'[\u2600-\u26ff]', '', text)  # Misc Symbols
+        text = re.sub(r'[\ufe0f]', '', text)  # Variation Selector
+        text = re.sub(r'[\u200d]', '', text)  # Zero Width Joiner
+
     result = []
     for char in text:
         # If character is in our map, use the mapped value
-        # Otherwise keep the original character
         if char in UNICODE_MAP:
             result.append(UNICODE_MAP[char])
         else:
             result.append(char)
             
-    return "".join(result)
+    return "".join(result).strip()  # Strip leading/trailing whitespace
