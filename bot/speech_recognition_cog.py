@@ -967,6 +967,25 @@ class SpeechRecognitionCog(commands.Cog):
                 # Inform user
                 await ctx.send(f"🎤 **GAME NA!** I'm listening in **{voice_channel.name}**! Just speak and I'll respond! (Type `g!stop` to end)")
                 
+                # Get list of members in voice channel (excluding bots)
+                members_in_vc = [m for m in voice_channel.members if not m.bot]
+                member_names = [m.display_name for m in members_in_vc]
+                
+                # Create greeting message with proper Tagalog
+                if len(member_names) == 0:
+                    greeting = "HOY TANGA! Handa na akong makinig, mag-salita ka lang!"
+                elif len(member_names) == 1:
+                    greeting = f"HOY TANGA {member_names[0]}! Handa na akong makinig, mag-salita ka lang!"
+                elif len(member_names) == 2:
+                    greeting = f"HOY TANGA {member_names[0]} at {member_names[1]}! Handa na akong makinig, mag-salita ka lang!"
+                else:
+                    # 3 or more people
+                    names_except_last = ", ".join(member_names[:-1])
+                    greeting = f"HOY TANGA {names_except_last}, at {member_names[-1]}! Handa na akong makinig, mag-salita ka lang!"
+                
+                # Speak the greeting
+                await self.speak_message(ctx.guild.id, greeting)
+                
                 # Start listening for audio (in a separate task)
                 if ctx.guild.id in self.listening_tasks and not self.listening_tasks[ctx.guild.id].done():
                     self.listening_tasks[ctx.guild.id].cancel()
