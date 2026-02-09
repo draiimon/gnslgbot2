@@ -126,7 +126,7 @@ Run `python verify_deployment.py` before deploying to check:
 - flask>=3.1.2 - Web server
 
 ### Voice & Audio
-- edge-tts==7.0.0 - Advanced TTS
+- edge-tts>=7.0.0 - Advanced TTS
 - gtts==2.5.4 - Google TTS
 - pydub==0.25.1 - Audio processing
 - SpeechRecognition==3.14.2 - Voice input
