@@ -158,6 +158,12 @@ class VoiceSink(AudioSinkBase):
             self.processing = False
             self.audio_data = bytearray()
 
+    def cleanup(self):
+        """Called when the audio sink is done being used"""
+        self.audio_data = bytearray()
+        self.buffer.clear()
+        print(f"🧹 VoiceSink for guild {self.guild_id} cleaned up")
+
 
 class SpeechRecognitionCog(commands.Cog):
     """Cog for handling speech recognition and voice interactions"""
