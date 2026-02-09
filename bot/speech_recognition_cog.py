@@ -905,7 +905,12 @@ class SpeechRecognitionCog(commands.Cog):
                         await asyncio.sleep(2.0 * attempt)
 
                     # Connect using VoiceRecvClient
-                    voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient, timeout=30.0, reconnect=True)
+                    if voice_recv:
+                        voice_client = await voice_channel.connect(cls=voice_recv.VoiceRecvClient, timeout=30.0, reconnect=True)
+                    else:
+                        print("⚠️ voice_recv not found, falling back to standard voice client")
+                        voice_client = await voice_channel.connect(timeout=30.0, reconnect=True)
+                    
                     self.voice_clients[voice_channel.guild.id] = voice_client
                     
                     # Initialize TTS queue if needed
@@ -936,6 +941,7 @@ class SpeechRecognitionCog(commands.Cog):
             raise e
     
     @commands.command(name="autotts", aliases=["ttsauto"])
+    @commands.cooldown(1, 5, commands.BucketType.user)
     async def autotts(self, ctx, action: str = None):  # type: ignore
         """Toggle automatic text-to-speech for a channel
         

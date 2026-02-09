@@ -254,8 +254,19 @@ async def on_command_error(ctx, error):
             await ctx.send(f"**KUPAL DI KANAMAN ADMIN!!!** {ctx.author.mention} **TANGINA MO!**")
         else:
             await ctx.send(f"**BOBO!** WALA KANG PERMISSION PARA GAMITIN YANG COMMAND NA YAN!")
+    elif isinstance(error, commands.CommandOnCooldown):
+        # Cool down message
+        await ctx.send(f"⏳ **SAGLIT LANG!** Antay ka ng {error.retry_after:.1f}s, masyado kang mabilis!")
+    elif isinstance(error, discord.HTTPException) and error.status == 429:
+        # Rate limited - DO NOT SEND MESSAGE
+        print(f"⚠️ RATE LIMITED: {error}")
     else:
-        await ctx.send(f"**PUTANGINA MAY ERROR!** TAWAG KA NALANG ULIT MAMAYA!")
+        # Only send generic error if it's not a rate limit issue
+        if not isinstance(error, discord.HTTPException):
+            try:
+                await ctx.send(f"**PUTANGINA MAY ERROR!** TAWAG KA NALANG ULIT MAMAYA!")
+            except:
+                pass # If we can't send, just ignore
         print(f"Error: {error}")
         # Print traceback for more detailed debugging
         import traceback
