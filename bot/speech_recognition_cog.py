@@ -37,12 +37,13 @@ import collections
 AudioSinkBase = voice_recv.AudioSink if voice_recv else object
 
 class VoiceSink(AudioSinkBase):
-    def __init__(self, cog, guild_id):
+    def __init__(self, cog, guild_id, target_user_id=None):
         if not voice_recv:
             return
             
         self.cog = cog
         self.guild_id = guild_id
+        self.target_user_id = target_user_id  # Only listen to this user (None = listen to all)
         self.buffer = collections.deque(maxlen=1000)  # ~20 seconds of audio
         self.silence_threshold = 2000  # Increased to reduce false positives from background noise
         self.silence_duration = 0.0
@@ -63,6 +64,10 @@ class VoiceSink(AudioSinkBase):
 
         # Ignore bots and self
         if not user or user.bot:
+            return
+        
+        # If we're filtering by user, only process audio from target user
+        if self.target_user_id and user.id != self.target_user_id:
             return
 
         # Simple energy-based silence detection
@@ -370,8 +375,13 @@ class SpeechRecognitionCog(commands.Cog):
         # No need to speak any welcome message - let's be faster and cleaner
         # await self.speak_message(ctx.guild.id, "Ginslog Bot is now listening! Just type your message in chat and I'll respond!")
     
-    async def start_listening_for_speech(self, ctx):
-        """Listen for voice commands using discord-ext-voice-recv"""
+    async def start_listening_for_speech(self, ctx, target_user_id=None):
+        """Listen for voice commands using discord-ext-voice-recv
+        
+        Args:
+            ctx: Command context
+            target_user_id: If provided, only listen to this specific user
+        """
         guild_id = ctx.guild.id
         
         # Set up the voice channel
@@ -392,10 +402,11 @@ class SpeechRecognitionCog(commands.Cog):
                 await ctx.send("❌ Voice receiving is not available on this host.")
                 return
 
-            # Start receiving
-            sink = VoiceSink(self, guild_id)
+            # Start receiving with optional user filter
+            sink = VoiceSink(self, guild_id, target_user_id)
             vc.listen(sink)
-            print(f"✅ Voice receiving started for guild {guild_id}")
+            user_filter_msg = f" (only listening to user {target_user_id})" if target_user_id else ""
+            print(f"✅ Voice receiving started for guild {guild_id}{user_filter_msg}")
             
             # Keep the task alive and auto-reconnect if needed
             while guild_id in self.listening_guilds:
@@ -404,8 +415,8 @@ class SpeechRecognitionCog(commands.Cog):
                     try:
                         # Try to reconnect
                         vc = await self._ensure_voice_connection(voice_channel)
-                        # Restart listening
-                        sink = VoiceSink(self, guild_id)
+                        # Restart listening with same user filter
+                        sink = VoiceSink(self, guild_id, target_user_id)
                         vc.listen(sink)
                         print(f"✅ Reconnected and resumed listening for guild {guild_id}")
                     except Exception as reconnect_error:
@@ -939,8 +950,10 @@ class SpeechRecognitionCog(commands.Cog):
                 if ctx.guild.id in self.listening_tasks and not self.listening_tasks[ctx.guild.id].done():
                     self.listening_tasks[ctx.guild.id].cancel()
                 
-                # Create a new listening task for this guild
-                self.listening_tasks[ctx.guild.id] = asyncio.create_task(self.start_listening_for_speech(ctx))
+                # Create a new listening task for this guild (with user filter)
+                self.listening_tasks[ctx.guild.id] = asyncio.create_task(
+                    self.start_listening_for_speech(ctx, target_user_id=ctx.author.id)
+                )
             
         except Exception as e:
             await ctx.send(f"❌ **ERROR:** {str(e)}")
