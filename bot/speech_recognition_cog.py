@@ -200,6 +200,7 @@ class SpeechRecognitionCog(commands.Cog):
         self.voice_clients = {}  # guild_id: voice_client
         self.tts_queue = {}  # guild_id: list of messages to speak
         self.listening_tasks = {}  # guild_id: asyncio task
+        self.active_voice_users = {}  # guild_id: user_id of active voice user
         self.temp_dir = "temp_audio"
         self.connection_monitors = {}  # guild_id: task monitoring connection status
         self.monitor_task = None  # Will store the monitor task 
@@ -441,6 +442,10 @@ class SpeechRecognitionCog(commands.Cog):
             del self.voice_clients[ctx.guild.id]
             self.listening_guilds.discard(ctx.guild.id)
             
+            # Clean up active voice user
+            if ctx.guild.id in self.active_voice_users:
+                del self.active_voice_users[ctx.guild.id]
+            
             # Cancel any active listening task
             if ctx.guild.id in self.listening_tasks:
                 try:
@@ -458,6 +463,10 @@ class SpeechRecognitionCog(commands.Cog):
         if ctx.guild.id in self.listening_guilds:
             # Clean up resources
             self.listening_guilds.discard(ctx.guild.id)
+            
+            # Clean up active voice user
+            if ctx.guild.id in self.active_voice_users:
+                del self.active_voice_users[ctx.guild.id]
             
             # Cancel the listening task
             if ctx.guild.id in self.listening_tasks:
@@ -936,7 +945,19 @@ class SpeechRecognitionCog(commands.Cog):
                 # Process and answer the question directly - ultra clean flow
                 await self.handle_voice_command(ctx.guild.id, ctx.author.id, question)
             else:
+                # Check if someone else is already using voice in this guild
+                if ctx.guild.id in self.active_voice_users:
+                    active_user_id = self.active_voice_users[ctx.guild.id]
+                    if active_user_id != ctx.author.id:
+                        active_user = ctx.guild.get_member(active_user_id)
+                        active_name = active_user.display_name if active_user else "someone"
+                        await ctx.send(f"**OY TANGA!** {active_name} is using voice right now! Let them finish first, mag-`g!stop` ka muna!")
+                        return
+                
                 # Start continuous listening mode (like g!listen)
+                
+                # Mark this user as active for voice
+                self.active_voice_users[ctx.guild.id] = ctx.author.id
                 
                 # Start listening
                 self.listening_guilds.add(ctx.guild.id)
