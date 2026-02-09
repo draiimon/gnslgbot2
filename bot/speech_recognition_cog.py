@@ -91,12 +91,22 @@ class VoiceSink(AudioSinkBase):
                     self.audio_data.extend(data.pcm)
                     
                     # If silence is long enough, process the audio
-                    if self.silence_duration > 1.5:  # 1.5 seconds of silence
+                    if self.silence_duration > 3.0:  # 3.0 seconds of silence (increased from 1.5s)
                         self.is_speaking = False  # Reset flag BEFORE processing
-                        audio_to_process = bytes(self.audio_data)  # Copy the data
-                        self.audio_data = bytearray()  # Clear for next recording
-                        print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(audio_to_process)} bytes)")
-                        asyncio.run_coroutine_threadsafe(self.process_audio(user, audio_to_process), self.cog.bot.loop)
+                        
+                        # Only process if not already processing (prevents queue buildup)
+                        if not self.processing:
+                            audio_to_process = bytes(self.audio_data)  # Copy the data
+                            self.audio_data = bytearray()  # Clear for next recording
+                            print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(audio_to_process)} bytes)")
+                            
+                            # Mark as processing to prevent overlapping transcriptions
+                            self.processing = True
+                            asyncio.run_coroutine_threadsafe(self.process_audio(user, audio_to_process), self.cog.bot.loop)
+                        else:
+                            # Already processing, discard this audio to prevent queue buildup
+                            print(f"⏭️ Skipping audio from {user.display_name} - still processing previous speech")
+                            self.audio_data = bytearray()
                         
         except Exception as e:
             print(f"Error in write: {e}")
@@ -385,10 +395,20 @@ class SpeechRecognitionCog(commands.Cog):
             vc.listen(sink)
             print(f"✅ Voice receiving started for guild {guild_id}")
             
-            # Keep the task alive
+            # Keep the task alive and auto-reconnect if needed
             while guild_id in self.listening_guilds:
                 if not vc.is_connected():
-                    break
+                    print(f"⚠️ Voice connection lost for guild {guild_id}, attempting to reconnect...")
+                    try:
+                        # Try to reconnect
+                        vc = await self._ensure_voice_connection(voice_channel)
+                        # Restart listening
+                        sink = VoiceSink(self, guild_id)
+                        vc.listen(sink)
+                        print(f"✅ Reconnected and resumed listening for guild {guild_id}")
+                    except Exception as reconnect_error:
+                        print(f"❌ Failed to reconnect: {reconnect_error}")
+                        break
                 await asyncio.sleep(1)
                 
         except Exception as e:
