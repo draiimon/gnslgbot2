@@ -101,8 +101,12 @@ class VoiceSink(AudioSinkBase):
                     self.silence_duration += 0.02  # Each chunk is 20ms
                     self.audio_data.extend(data.pcm)
                     
+                    # Debug: Log silence progress every 0.5s
+                    if int(self.silence_duration * 10) % 5 == 0 and self.silence_duration > 0:
+                        print(f"⏱️ Silence: {self.silence_duration:.1f}s (need 2.0s to process)")
+                    
                     # If silence is long enough, process the audio
-                    if self.silence_duration > 3.0:  # 3.0 seconds of silence (increased from 1.5s)
+                    if self.silence_duration > 2.0:  # 2.0 seconds of silence (reduced from 3.0s for faster response)
                         self.is_speaking = False  # Reset flag BEFORE processing
                         
                         # Only process if not already processing (prevents queue buildup)
