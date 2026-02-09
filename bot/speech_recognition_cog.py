@@ -93,17 +93,18 @@ class VoiceSink(AudioSinkBase):
                     # If silence is long enough, process the audio
                     if self.silence_duration > 1.5:  # 1.5 seconds of silence
                         self.is_speaking = False  # Reset flag BEFORE processing
-                        print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(self.audio_data)} bytes)")
-                        asyncio.run_coroutine_threadsafe(self.process_audio(user), self.cog.bot.loop)
-                        self.audio_data = bytearray()
+                        audio_to_process = bytes(self.audio_data)  # Copy the data
+                        self.audio_data = bytearray()  # Clear for next recording
+                        print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(audio_to_process)} bytes)")
+                        asyncio.run_coroutine_threadsafe(self.process_audio(user, audio_to_process), self.cog.bot.loop)
                         
         except Exception as e:
             print(f"Error in write: {e}")
             import traceback
             traceback.print_exc()
 
-    async def process_audio(self, user):
-        if len(self.audio_data) < 48000:  # Ignore very short clips (< 0.5s)
+    async def process_audio(self, user, audio_data):
+        if len(audio_data) < 48000:  # Ignore very short clips (< 0.5s)
             return
             
         self.processing = True
@@ -116,7 +117,7 @@ class VoiceSink(AudioSinkBase):
                 wf.setnchannels(self.channels)
                 wf.setsampwidth(self.sample_width)
                 wf.setframerate(self.sample_rate)
-                wf.writeframes(self.audio_data)
+                wf.writeframes(audio_data)
                 
             # Transcribe with Groq
             if self.cog.groq_client:
