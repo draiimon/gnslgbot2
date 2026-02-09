@@ -479,6 +479,19 @@ class SpeechRecognitionCog(commands.Cog):
         # Get the next message
         message = self.tts_queue[guild_id].pop(0)
         
+        # Normalize text to handle fancy fonts
+        try:
+            from bot.text_normalizer import normalize_text
+            # Normalize the message content
+            original_message = message
+            message = normalize_text(message)
+            if original_message != message:
+                print(f"🔄 Normalized TTS text: '{original_message}' -> '{message}'")
+        except ImportError:
+            print("⚠️ Text normalizer not found, skipping normalization")
+        except Exception as e:
+            print(f"⚠️ Error normalizing text: {e}")
+        
         # Generate TTS audio directly in memory
         try:
             # Detect language (simplified version)
