@@ -813,9 +813,10 @@ class SpeechRecognitionCog(commands.Cog):
                 return
             
             # Create FFmpeg audio source with optimized settings for Discord
+            # Removed -ar 48000 -ac 2 to prevent "Multiple options" warnings
             source = discord.FFmpegPCMAudio(
                 temp_file,
-                options='-vn -ar 48000 -ac 2 -b:a 128k'
+                options='-vn -loglevel warning'
             )
             
             # Play the TTS message with cleanup callback
