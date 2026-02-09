@@ -92,6 +92,7 @@ class VoiceSink(AudioSinkBase):
                     
                     # If silence is long enough, process the audio
                     if self.silence_duration > 1.5:  # 1.5 seconds of silence
+                        self.is_speaking = False  # Reset flag BEFORE processing
                         print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(self.audio_data)} bytes)")
                         asyncio.run_coroutine_threadsafe(self.process_audio(user), self.cog.bot.loop)
                         self.audio_data = bytearray()
