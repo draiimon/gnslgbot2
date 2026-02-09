@@ -61,6 +61,10 @@ class VoiceSink(AudioSinkBase):
         if self.processing:
             return
 
+        # Ignore bots and self
+        if not user or user.bot:
+            return
+
         # Simple energy-based silence detection
         # This is a very basic implementation
         # For production, we might want to use webrtcvad
@@ -76,9 +80,9 @@ class VoiceSink(AudioSinkBase):
             if max_amp > self.silence_threshold:
                 if not self.is_speaking:
                     self.is_speaking = True
-                    # print(f"🗣️ Speech detected from {user}")
+                    print(f"🗣️ Speech detected from {user.display_name} (amp: {max_amp})")
                 
-                self.silence_duration = 0
+                self.silence_duration = 0.0
                 self.audio_data.extend(data.pcm)
                 self.last_speech_time = time.time()
             else:
@@ -88,12 +92,14 @@ class VoiceSink(AudioSinkBase):
                     
                     # If silence is long enough, process the audio
                     if self.silence_duration > 1.5:  # 1.5 seconds of silence
-                        self.is_speaking = False
-                        asyncio.create_task(self.process_audio(user))
+                        print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(self.audio_data)} bytes)")
+                        asyncio.run_coroutine_threadsafe(self.process_audio(user), self.cog.bot.loop)
                         self.audio_data = bytearray()
                         
         except Exception as e:
             print(f"Error in write: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def process_audio(self, user):
         if len(self.audio_data) < 48000:  # Ignore very short clips (< 0.5s)
