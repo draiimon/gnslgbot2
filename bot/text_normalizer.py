@@ -99,7 +99,18 @@ def normalize_text(text: str) -> str:
     if not text:
         return ""
         
-    # Remove emojis using regex
+    # Step 1: Normalize fancy unicode characters to ASCII
+    # We do this FIRST so we don't accidentally strip them as "emojis"
+    processed_text = []
+    for char in text:
+        if char in UNICODE_MAP:
+            processed_text.append(UNICODE_MAP[char])
+        else:
+            processed_text.append(char)
+    
+    text = "".join(processed_text)
+
+    # Step 2: Remove emojis and symbols using regex
     # Covers: Emoticons, Transport/Map, Enclosed Alphanumeric, Dingbats, Formatting, etc.
     if text:
         text = re.sub(r'[\U00010000-\U0010ffff]', '', text)  # Supplementary Multilingual Plane (Most Emojis)
@@ -107,13 +118,5 @@ def normalize_text(text: str) -> str:
         text = re.sub(r'[\u2600-\u26ff]', '', text)  # Misc Symbols
         text = re.sub(r'[\ufe0f]', '', text)  # Variation Selector
         text = re.sub(r'[\u200d]', '', text)  # Zero Width Joiner
-
-    result = []
-    for char in text:
-        # If character is in our map, use the mapped value
-        if char in UNICODE_MAP:
-            result.append(UNICODE_MAP[char])
-        else:
-            result.append(char)
             
-    return "".join(result).strip()  # Strip leading/trailing whitespace
+    return text.strip()  # Strip leading/trailing whitespace
