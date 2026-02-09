@@ -56,6 +56,7 @@ class VoiceSink(AudioSinkBase):
         self.is_speaking = False
         self.audio_data = bytearray()
         self.last_speech_time = time.time()
+        self.last_silence_log = 0.0  # Track last logged silence value
         self.processing = False
         self.sample_width = 2
         self.channels = 2
@@ -94,6 +95,7 @@ class VoiceSink(AudioSinkBase):
                     print(f"🗣️ Speech detected from {user.display_name} (amp: {max_amp})")
                 
                 self.silence_duration = 0.0
+                self.last_silence_log = 0.0  # Reset silence log tracker
                 self.audio_data.extend(data.pcm)
                 self.last_speech_time = time.time()
             else:
@@ -102,8 +104,9 @@ class VoiceSink(AudioSinkBase):
                     self.audio_data.extend(data.pcm)
                     
                     # Debug: Log silence progress every 0.5s
-                    if int(self.silence_duration * 10) % 5 == 0 and self.silence_duration > 0:
+                    if self.silence_duration >= self.last_silence_log + 0.5:
                         print(f"⏱️ Silence: {self.silence_duration:.1f}s (need 2.0s to process)")
+                        self.last_silence_log = self.silence_duration
                     
                     # If silence is long enough, process the audio
                     if self.silence_duration > 2.0:  # 2.0 seconds of silence (reduced from 3.0s for faster response)
