@@ -15,7 +15,7 @@ google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.0
 
 # Voice and Audio Processing
-edge-tts==7.0.0
+edge-tts>=7.0.0
 gtts==2.5.4
 pydub==0.25.1
 SpeechRecognition==3.14.2
