@@ -186,52 +186,62 @@ async def check_greetings():
     current_hour = now.hour
     current_date = now.date()
     
-    # Get the greetings channel
+    # Get the greetings channel with robust fetching
     channel = bot.get_channel(Config.GREETINGS_CHANNEL_ID)
     if not channel:
-        return
+        try:
+            channel = await bot.fetch_channel(Config.GREETINGS_CHANNEL_ID)
+        except Exception:
+            return
+            
+    # Get ChatCog for AI greeting generation
+    chat_cog = bot.get_cog("ChatCog")
     
     # Check if it's time for good morning greeting (8:00 AM)
     if (current_hour == Config.GOOD_MORNING_HOUR and 
             (last_morning_greeting_date is None or last_morning_greeting_date != current_date)):
         
-        # Get all online members
+        # Get all online, idle, and DND members
         online_members = [member for member in channel.guild.members 
-                         if member.status == discord.Status.online and not member.bot]
+                         if member.status in [discord.Status.online, discord.Status.idle, discord.Status.dnd] 
+                         and not member.bot]
         
-        # If there are online members, mention them
+        # If there are online members, send AI greeting
         if online_members:
-            mentions = " ".join([member.mention for member in online_members])
-            morning_messages = [
-                f"**MAGANDANG UMAGA MGA GAGO!** {mentions} GISING NA KAYO! DALI DALI TRABAHO NA!",
-                f"**RISE AND SHINE MGA BOBO!** {mentions} TANGINA NIYO GISING NA! PRODUCTIVITY TIME!",
-                f"**GOOD MORNING MOTHERFUCKERS!** {mentions} WELCOME TO ANOTHER DAY OF YOUR PATHETIC LIVES!",
-                f"**HOY GISING NA!** {mentions} TANGHALI NA GAGO! DALI DALI MAG-TRABAHO KA NA!",
-                f"**AYAN! UMAGA NA!** {mentions} BILISAN MO NA! SIBAT NA SA TRABAHO!"
-            ]
-            await channel.send(random.choice(morning_messages))
+            if chat_cog:
+                greeting = await chat_cog.generate_greeting("morning", online_members)
+            else:
+                mentions = " ".join([member.mention for member in online_members])
+                morning_messages = [
+                    f"**MAGANDANG UMAGA MGA GAGO!** {mentions} GISING NA KAYO! DALI DALI TRABAHO NA!",
+                    f"**RISE AND SHINE MGA BOBO!** {mentions} TANGINA NIYO GISING NA! PRODUCTIVITY TIME!"
+                ]
+                greeting = random.choice(morning_messages)
+                
+            await channel.send(greeting)
             
             # Update last greeting date
             last_morning_greeting_date = current_date
-            print(f"✅ Sent good morning greeting at {now}")
+            print(f"✅ Sent AI morning greeting at {now}")
     
     # Check if it's time for good night greeting (10:00 PM)
     elif (current_hour == Config.GOOD_NIGHT_HOUR and 
             (last_night_greeting_date is None or last_night_greeting_date != current_date)):
         
-        night_messages = [
-            "**TULOG NA MGA GAGO!** TANGINANG MGA YAN PUYAT PA MORE! UUBUSIN NIYO BUHAY NIYO SA DISCORD? MAAGA PA PASOK BUKAS!",
-            "**GOOD NIGHT MGA HAYOP!** MATULOG NA KAYO WALA KAYONG MAPAPALA SA PAGIGING PUYAT!",
-            "**HUWAG NA KAYO MAG-PUYAT GAGO!** MAAWA KAYO SA KATAWAN NIYO! PUTA TULOG NA KAYO!",
-            "**10PM NA GAGO!** TULOG NA MGA WALA KAYONG DISIPLINA SA BUHAY! BILIS!",
-            "**TANGINANG MGA TO! MAG TULOG NA KAYO!** WALA BA KAYONG TRABAHO BUKAS? UUBUSIN NIYO ORAS NIYO DITO SA DISCORD!"
-        ]
-        
-        await channel.send(random.choice(night_messages))
+        if chat_cog:
+            greeting = await chat_cog.generate_greeting("night")
+        else:
+            night_messages = [
+                "**TULOG NA MGA GAGO!** TANGINANG MGA YAN PUYAT PA MORE!",
+                "**GOOD NIGHT MGA HAYOP!** MATULOG NA KAYO!"
+            ]
+            greeting = random.choice(night_messages)
+            
+        await channel.send(greeting)
         
         # Update last greeting date
         last_night_greeting_date = current_date
-        print(f"✅ Sent good night greeting at {now}")
+        print(f"✅ Sent AI night greeting at {now}")
 
 @check_greetings.before_loop
 async def before_check_greetings():

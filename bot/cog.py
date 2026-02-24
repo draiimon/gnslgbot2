@@ -965,6 +965,66 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
             # More friendly error message
             return "Ay sorry ha! May error sa system ko. Pwede mo ba ulit subukan? Mejo nagkaka-aberya ang AI ko eh. Pasensya na! 😅"
 
+    async def generate_greeting(self, greeting_type, members=None):
+        """Generate an AI greeting based on type (morning/night) with the bot's signature attitude"""
+        try:
+            mentions = ""
+            if members:
+                # Limit mentions to avoid too long messages if many people are online
+                max_mentions = 15
+                if len(members) > max_mentions:
+                    mentions = " ".join([m.mention for m in members[:max_mentions]]) + "... at marami pang iba!"
+                else:
+                    mentions = " ".join([m.mention for m in members])
+            
+            if greeting_type == "morning":
+                prompt = f"Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Morning greeting sa Tagalog para sa mga kupal na to: {mentions}. Siguraduhin mong may mura at sabihan mo silang gising na dahil tanghali na at kailangan nilang mag-trabaho dahil wala silang kwenta. Isang paragraph lang at diretso sa punto."
+            else:
+                prompt = "Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Night greeting sa Tagalog. Sabihan mo silang matulog na dahil puyat na sila sa Discord at wala silang mapapala dito kundi pagiging palamunin. Murahin mo silang mabuti. Isang paragraph lang at diretso sa punto."
+
+            system_prompt = """Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
+Dapat barumbado, diretso, at walang paligoy-ligoy. Sumagot sa Tagalog.
+Huwag gumamit ng emojis maliban kung pang-asar lang. 
+Siguraduhin na ang tono mo ay galit at naiirita."""
+
+            response = await asyncio.to_thread(
+                self.groq_client.chat.completions.create,
+                model=Config.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.9,
+                max_tokens=600
+            )
+
+            ai_response = response.choices[0].message.content
+            # Clean of thinking blocks and strip whitespace
+            ai_response = re.sub(r'<think>.*?</think>', '', ai_response, flags=re.DOTALL).strip()
+            
+            # Ensure mentions are included if it's a morning greeting and they're not in the response
+            if greeting_type == "morning" and mentions and not any(m.mention in ai_response for m in (members[:5] if members else [])):
+                ai_response = f"{mentions}\n\n{ai_response}"
+                
+            return ai_response
+        except Exception as e:
+            print(f"Error generating AI greeting: {e}")
+            # Fallback to hardcoded messages if AI fails
+            if greeting_type == "morning":
+                morning_messages = [
+                    f"**MAGANDANG UMAGA MGA GAGO!** {mentions} GISING NA KAYO! DALI DALI TRABAHO NA!",
+                    f"**RISE AND SHINE MGA BOBO!** {mentions} TANGINA NIYO GISING NA! PRODUCTIVITY TIME!",
+                    f"**GOOD MORNING MOTHERFUCKERS!** {mentions} WELCOME TO ANOTHER DAY OF YOUR PATHETIC LIVES!"
+                ]
+                return random.choice(morning_messages)
+            else:
+                night_messages = [
+                    "**TULOG NA MGA GAGO!** TANGINANG MGA YAN PUYAT PA MORE! UUBUSIN NIYO BUHAY NIYO SA DISCORD?",
+                    "**GOOD NIGHT MGA HAYOP!** MATULOG NA KAYO WALA KAYONG MAPAPALA SA PAGIGING PUYAT!",
+                    "**HUWAG NA KAYO MAG-PUYAT GAGO!** MAAWA KAYO SA KATAWAN NIYO! PUTA TULOG NA KAYO!"
+                ]
+                return random.choice(night_messages)
+
     @commands.command(name="usap")
     async def usap(self, ctx, *, message: str):
         """Chat with Ginsilog AI (g!ask command)"""
@@ -1382,29 +1442,28 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
         # Get the greetings channel
         channel = self.bot.get_channel(Config.GREETINGS_CHANNEL_ID)
         if not channel:
-            await ctx.send("**ERROR:** Hindi mahanap ang greetings channel!")
-            return
+            try:
+                channel = await self.bot.fetch_channel(Config.GREETINGS_CHANNEL_ID)
+            except Exception:
+                await ctx.send("**ERROR:** Hindi mahanap ang greetings channel!")
+                return
 
-        # Get all online members
+        # Get all online, idle, and DND members
         online_members = [
             member for member in channel.guild.members
-            if member.status == discord.Status.online and not member.bot
+            if member.status in [discord.Status.online, discord.Status.idle, discord.Status.dnd] 
+            and not member.bot
         ]
 
-        # If there are online members, mention them
+        # If there are online members, send AI greeting
         if online_members:
-            mentions = " ".join([member.mention for member in online_members])
-            morning_messages = [
-                f"**MAGANDANG UMAGA MGA GAGO!** {mentions} GISING NA KAYO! DALI DALI TRABAHO NA!",
-                f"**RISE AND SHINE MGA BOBO!** {mentions} TANGINA NIYO GISING NA! PRODUCTIVITY TIME!",
-                f"**GOOD MORNING MOTHERFUCKERS!** {mentions} WELCOME TO ANOTHER DAY OF YOUR PATHETIC LIVES!",
-                f"**HOY GISING NA!** {mentions} TANGHALI NA GAGO! DALI DALI MAG-TRABAHO KA NA!",
-                f"**AYAN! UMAGA NA!** {mentions} BILISAN MO NA! SIBAT NA SA TRABAHO!"
-            ]
-            await channel.send(random.choice(morning_messages))
-            await ctx.send("**NAPA-GOODMORNING MO ANG MGA TANGA!**")
+            greeting = await self.generate_greeting("morning", online_members)
+            await channel.send(greeting)
+            await ctx.send("**NAPA-GOODMORNING MO NA ANG MGA TANGA GAMIT ANG AI!**")
         else:
-            await ctx.send("**WALANG ONLINE NA TANGA!** Walang imemention!")
+            await ctx.send("**WALANG ACTIVE NA TANGA!** Pero mag-gegenerate pa rin ako para sa lahat.")
+            greeting = await self.generate_greeting("morning")
+            await channel.send(greeting)
 
     @commands.command(name="test")
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))  # Admin roles check
@@ -1463,19 +1522,16 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
         # Get the greetings channel
         channel = self.bot.get_channel(Config.GREETINGS_CHANNEL_ID)
         if not channel:
-            await ctx.send("**ERROR:** Hindi mahanap ang greetings channel!")
-            return
+            try:
+                channel = await self.bot.fetch_channel(Config.GREETINGS_CHANNEL_ID)
+            except Exception:
+                await ctx.send("**ERROR:** Hindi mahanap ang greetings channel!")
+                return
 
-        night_messages = [
-            "**TULOG NA MGA GAGO!** TANGINANG MGA YAN PUYAT PA MORE! UUBUSIN NIYO BUHAY NIYO SA DISCORD? MAAGA PA PASOK BUKAS!",
-            "**GOOD NIGHT MGA HAYOP!** MATULOG NA KAYO WALA KAYONG MAPAPALA SA PAGIGING PUYAT!",
-            "**HUWAG NA KAYO MAG-PUYAT GAGO!** MAAWA KAYO SA KATAWAN NIYO! PUTA TULOG NA KAYO!",
-            "**10PM NA GAGO!** TULOG NA MGA WALA KAYONG DISIPLINA SA BUHAY! BILIS!",
-            "**TANGINANG MGA TO! MAG TULOG NA KAYO!** WALA BA KAYONG TRABAHO BUKAS? UUBUSIN NIYO ORAS NIYO DITO SA DISCORD!"
-        ]
-
-        await channel.send(random.choice(night_messages))
-        await ctx.send("**PINATULOG MO NA ANG MGA TANGA!**")
+        # Generate AI greeting
+        greeting = await self.generate_greeting("night")
+        await channel.send(greeting)
+        await ctx.send("**PINATULOG MO NA ANG MGA TANGA GAMIT ANG AI!**")
 
     @commands.command(name="g")
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))  # Admin roles check
