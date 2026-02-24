@@ -104,8 +104,8 @@ class ChatCog(commands.Cog):
         # Clean the name using our centralized function (only removes trailing emojis)
         clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
 
-        # Convert to Unicode bold style using config
-        formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
+        # Convert to Unicode bold style using our helper
+        formatted_name = self.format_to_bold(clean_name)
 
         # Add the role emoji
         new_name = f"{formatted_name} {emoji}"
@@ -124,11 +124,48 @@ class ChatCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Called when the cog is ready - start the nickname scanning task"""
+        """Called when the cog is ready - start tasks and initial maintenance"""
         # Now that bot is ready, set the task if it wasn't set in __init__
         if self.nickname_update_task is None:
             self.nickname_update_task = self.bot.loop.create_task(self._regular_nickname_scan())
             print(f"🔄 Starting automatic nickname maintenance task")
+
+        # Ensure the specific channel requested is bolded
+        try:
+            target_channel_id = 1345990622598922326
+            channel = self.bot.get_channel(target_channel_id)
+            if channel:
+                bold_name = self.format_to_bold(channel.name)
+                if channel.name != bold_name:
+                    await channel.edit(name=bold_name)
+                    print(f"✅ Initial bolding applied to target channel: {channel.name}")
+        except Exception as e:
+            print(f"❌ Error during initial channel bolding: {e}")
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel):
+        """Automatically convert new channel names to bold style"""
+        try:
+            # Skip if it's already in the correct format
+            bold_name = self.format_to_bold(channel.name)
+            if channel.name != bold_name:
+                await channel.edit(name=bold_name)
+                print(f"✅ Auto-bolded new channel name: {channel.name} -> {bold_name}")
+        except Exception as e:
+            print(f"❌ Error bolding new channel {channel.name}: {e}")
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(self, before, after):
+        """Ensure channel names stay in bold style when renamed"""
+        try:
+            # Avoid infinite loop - only update if the name actually changed and isn't bolded
+            if before.name != after.name:
+                bold_name = self.format_to_bold(after.name)
+                if after.name != bold_name:
+                    await after.edit(name=bold_name)
+                    print(f"✅ Re-bolded updated channel name: {after.name} -> {bold_name}")
+        except Exception as e:
+            print(f"❌ Error re-bolding updated channel {after.name}: {e}")
 
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
@@ -214,8 +251,8 @@ class ChatCog(commands.Cog):
             # Use our centralized emoji cleaning function to only remove trailing emojis
             clean_name = self.clean_name_of_emojis(original_name, role_emoji_map)
 
-            # Convert to Unicode bold style using config (preserves user's actual nickname)
-            formatted_name = ''.join(Config.UNICODE_MAP.get(c, c) for c in clean_name)
+            # Convert to Unicode bold style using our helper (preserves user's actual nickname)
+            formatted_name = self.format_to_bold(clean_name)
 
             # Add the role emoji - just one emoji at the end as requested
             new_name = f"{formatted_name} {emoji}"
@@ -445,6 +482,13 @@ class ChatCog(commands.Cog):
                 await message.channel.send(response)
 
     # === HELPER FUNCTIONS ===
+    def format_to_bold(self, text):
+        """Convert standard text to fancy unicode bold style from Config"""
+        if not text:
+            return text
+        # Use Config.UNICODE_MAP to convert each character
+        return ''.join(Config.UNICODE_MAP.get(c, c) for c in text)
+
     def get_user_balance(self, user_id):
         """Get user's balance with aggressive Tagalog flair"""
         if self.db and self.db.connected:

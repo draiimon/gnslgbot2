@@ -16,6 +16,7 @@ from bot.runtime_config import can_use_audio_features
 # Suppress noisy voice_recv logs BEFORE importing the library
 logging.getLogger('discord.ext.voice_recv.reader').setLevel(logging.WARNING)
 logging.getLogger('discord.ext.voice_recv.opus').setLevel(logging.WARNING)
+logging.getLogger('discord.ext.voice_recv.gateway').setLevel(logging.WARNING)
 
 # Conditionally import PyAudio-dependent modules
 try:
