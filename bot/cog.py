@@ -978,12 +978,13 @@ IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <thin
                     mentions = " ".join([m.mention for m in members])
             
             if greeting_type == "morning":
-                prompt = f"Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Morning greeting sa Tagalog para sa mga kupal na to: {mentions}. Siguraduhin mong may mura at sabihan mo silang gising na dahil tanghali na at kailangan nilang mag-trabaho dahil wala silang kwenta. Isang paragraph lang at diretso sa punto."
+                prompt = f"Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Morning greeting sa Tagalog para sa mga kupal na to: {mentions}. Siguraduhin mong may mura gaya ng 'putangina niyo' at sabihan mo silang gising na dahil tanghali na at kailangan nilang mag-trabaho dahil wala silang kwenta. Isang paragraph lang at diretso sa punto."
             else:
-                prompt = "Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Night greeting sa Tagalog. Sabihan mo silang matulog na dahil puyat na sila sa Discord at wala silang mapapala dito kundi pagiging palamunin. Murahin mo silang mabuti. Isang paragraph lang at diretso sa punto."
+                prompt = "Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Night greeting sa Tagalog. Sabihan mo silang matulog na dahil puyat na sila sa Discord at wala silang mapapala dito kundi pagiging palamunin. Murahin mo silang mabuti (halimbawa: sigawan mo sila ng 'putangina niyo'). Isang paragraph lang at diretso sa punto."
 
-            system_prompt = """Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
-Dapat barumbado, diretso, at walang paligoy-ligoy. Sumagot sa Tagalog.
+            system_prompt = """Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura (gaya ng 'putangina', 'gago', 'bobo'), laging may angas. 
+Dapat barumbado, diretso, at walang paligoy-ligoy. Sumagot sa Tagalog. 
+Huwag kang mahiya mag-mura dahil yan ang personality mo.
 Huwag gumamit ng emojis maliban kung pang-asar lang. 
 Siguraduhin na ang tono mo ay galit at naiirita."""
 
