@@ -40,6 +40,7 @@ class ChatCog(commands.Cog):
 
         # Setup for nickname scanning - RENDER FIX: only set task in async context
         self.nickname_update_task = None
+        self.channel_maintenance_task = None
         self.nickname_scanning_active = True
 
         # Setup for role-emoji mappings - dynamic configuration
@@ -125,22 +126,15 @@ class ChatCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         """Called when the cog is ready - start tasks and initial maintenance"""
-        # Now that bot is ready, set the task if it wasn't set in __init__
+        # Start nickname scanning task
         if self.nickname_update_task is None:
             self.nickname_update_task = self.bot.loop.create_task(self._regular_nickname_scan())
             print(f"🔄 Starting automatic nickname maintenance task")
 
-        # Ensure the specific channel requested is bolded
-        try:
-            target_channel_id = 1345990622598922326
-            channel = self.bot.get_channel(target_channel_id)
-            if channel:
-                bold_name = self.format_to_bold(channel.name)
-                if channel.name != bold_name:
-                    await channel.edit(name=bold_name)
-                    print(f"✅ Initial bolding applied to target channel: {channel.name}")
-        except Exception as e:
-            print(f"❌ Error during initial channel bolding: {e}")
+        # Start channel maintenance task for counters and stats
+        if self.channel_maintenance_task is None:
+            self.channel_maintenance_task = self.bot.loop.create_task(self._regular_channel_maintenance())
+            print(f"📊 Starting automatic channel bolding maintenance task")
 
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel):
@@ -150,22 +144,31 @@ class ChatCog(commands.Cog):
             bold_name = self.format_to_bold(channel.name)
             if channel.name != bold_name:
                 await channel.edit(name=bold_name)
-                print(f"✅ Auto-bolded new channel name: {channel.name} -> {bold_name}")
+                print(f"✅ Auto-bolded new channel: {channel.name} -> {bold_name}")
+        except discord.Forbidden:
+            pass # No permissions for this channel
         except Exception as e:
-            print(f"❌ Error bolding new channel {channel.name}: {e}")
+            if "Rate limited" not in str(e):
+                print(f"❌ Error bolding new channel {channel.name}: {e}")
 
     @commands.Cog.listener()
     async def on_guild_channel_update(self, before, after):
-        """Ensure channel names stay in bold style when renamed"""
+        """Ensure channel names stay in bold style when renamed or font is changed"""
         try:
-            # Avoid infinite loop - only update if the name actually changed and isn't bolded
-            if before.name != after.name:
-                bold_name = self.format_to_bold(after.name)
-                if after.name != bold_name:
-                    await after.edit(name=bold_name)
-                    print(f"✅ Re-bolded updated channel name: {after.name} -> {bold_name}")
+            # Always check the final name against its bold version
+            # This catches changes from normal font back to bold font
+            bold_name = self.format_to_bold(after.name)
+            if after.name != bold_name:
+                # Discord has a strict rate limit for channel names (2 per 10 mins)
+                # We try to edit, but expect potential 429s which the task will handle later
+                await after.edit(name=bold_name)
+                print(f"✅ Auto-bolded changed channel: {after.name} -> {bold_name}")
+        except discord.Forbidden:
+            pass # No permissions for this channel
         except Exception as e:
-            print(f"❌ Error re-bolding updated channel {after.name}: {e}")
+            if "Rate limited" not in str(e):
+                # Don't spam logs with rate limit errors as they are expected with counter bots
+                pass
 
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
@@ -482,6 +485,47 @@ class ChatCog(commands.Cog):
                 await message.channel.send(response)
 
     # === HELPER FUNCTIONS ===
+    async def _regular_channel_maintenance(self):
+        """Background task to ensure all channels (especially counters) stay bolded"""
+        await self.bot.wait_until_ready()
+        print("🔍 Channel bolding maintenance task started")
+        
+        while not self.bot.is_closed():
+            try:
+                for guild in self.bot.guilds:
+                    for channel in guild.channels:
+                        # Skip if there's no name or name is already bolded
+                        if not channel.name:
+                            continue
+                            
+                        bold_name = self.format_to_bold(channel.name)
+                        if channel.name != bold_name:
+                            try:
+                                # Attempt to boldify
+                                await channel.edit(name=bold_name)
+                                print(f"🔧 Maintenance: Bolded recovered channel {channel.name}")
+                                # Slow down to respect Discord's strict channel name rate limits
+                                # Limits are roughly 2 edits per 10 minutes per channel
+                                await asyncio.sleep(5)
+                            except discord.Forbidden:
+                                # Bot doesn't have permission for this channel
+                                continue
+                            except discord.HTTPException as e:
+                                if e.status == 429: # Too many requests
+                                    # We hit a rate limit, cool down for a while
+                                    retry_after = getattr(e, 'retry_after', 600)
+                                    print(f"⏳ Channel bolding rate limited, waiting {retry_after}s")
+                                    await asyncio.sleep(retry_after + 1)
+                                    break # Move to next loop iteration
+                                continue
+                            except Exception:
+                                continue
+            except Exception as e:
+                print(f"❌ Error in channel maintenance loop: {e}")
+                
+            # Scan again in 10 minutes (matching Discord's channel edit rate limit window)
+            await asyncio.sleep(600)
+
     def format_to_bold(self, text):
         """Convert standard text to fancy unicode bold style from Config"""
         if not text:
