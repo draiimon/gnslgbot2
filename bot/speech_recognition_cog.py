@@ -65,6 +65,7 @@ class VoiceSink(AudioSinkBase):
         self.sample_width = 2
         self.channels = 2
         self.sample_rate = 48000
+        self._last_cleanup_at = 0.0
 
     def wants_opus(self):
         return False
@@ -175,6 +176,22 @@ class VoiceSink(AudioSinkBase):
                         print(f"📝 Transcription: '{text}'")
                         
                         if text and len(text) > 2:  # Ignore empty or very short transcriptions
+                            # Persist transcript like JanJan (messages table) for memory + auditing
+                            try:
+                                if self.cog.db and self.cog.db.connected:
+                                    text_channel = self.cog._pick_text_channel(self.guild_id)
+                                    if text_channel:
+                                        self.cog.db.log_message(
+                                            self.guild_id,
+                                            int(text_channel.id),
+                                            int(user.id if user else 0),
+                                            str(user.display_name if user else "unknown"),
+                                            text,
+                                            is_bot=False,
+                                        )
+                            except Exception as e:
+                                print(f"⚠️ Failed to persist STT transcript: {e}")
+
                             # Check if user said "stop" or "cancel"
                             if text.lower() in ["stop", "cancel", "hinto", "tigil", "tama na"]:
                                 await self.cog.speak_message(self.guild_id, "Okay, stopping conversation.")
@@ -190,6 +207,16 @@ class VoiceSink(AudioSinkBase):
                                     text,
                                     text_channel=self.cog._pick_text_channel(self.guild_id),
                                 )
+
+                                # JanJan-style: wait for TTS to finish before allowing next utterance
+                                try:
+                                    vc = self.cog.voice_clients.get(self.guild_id)
+                                    if vc and vc.is_connected():
+                                        deadline = time.time() + 30.0
+                                        while vc.is_playing() and time.time() < deadline:
+                                            await asyncio.sleep(0.1)
+                                except Exception:
+                                    pass
                                 
                     except Exception as e:
                         if "429" in str(e):
@@ -215,6 +242,22 @@ class VoiceSink(AudioSinkBase):
         self.audio_data = bytearray()
         self.buffer.clear()
         print(f"🧹 VoiceSink for guild {self.guild_id} cleaned up")
+        # If the underlying voice_recv packet router dies (e.g., OpusError: corrupted stream),
+        # the sink gets cleaned up but our listening task might still be running.
+        # Trigger a best-effort restart on the bot loop.
+        try:
+            now = time.time()
+            if now - self._last_cleanup_at < 3.0:
+                return
+            self._last_cleanup_at = now
+            if getattr(self.cog, "bot", None) and getattr(self.cog.bot, "loop", None):
+                asyncio.run_coroutine_threadsafe(
+                    self.cog._on_sink_cleanup(self.guild_id),
+                    self.cog.bot.loop,
+                )
+        except Exception:
+            # Never let cleanup raise (called from voice thread)
+            pass
 
 
 class SpeechRecognitionCog(commands.Cog):
@@ -232,6 +275,9 @@ class SpeechRecognitionCog(commands.Cog):
         self.connection_monitors = {}  # guild_id: task monitoring connection status
         self.monitor_task = None  # Will store the monitor task 
         self.commands_checked = False  # Flag to ensure commands are properly registered
+        self._listening_sessions = {}  # guild_id: {channel_id:int, target_user_id:int|None}
+        self._receive_restart_inflight = set()  # guild_id currently restarting
+        self._receive_restart_backoff_until = {}  # guild_id: monotonic seconds
         
         # Make sure temp directory exists
         os.makedirs(self.temp_dir, exist_ok=True)
@@ -533,6 +579,10 @@ class SpeechRecognitionCog(commands.Cog):
             # Start receiving with optional user filter
             sink = VoiceSink(self, guild_id, target_user_id)
             vc.listen(sink)
+            self._listening_sessions[guild_id] = {
+                "channel_id": int(voice_channel.id),
+                "target_user_id": int(target_user_id) if target_user_id else None,
+            }
             user_filter_msg = f" (only listening to user {target_user_id})" if target_user_id else ""
             print(f"✅ Voice receiving started for guild {guild_id}{user_filter_msg}")
             
@@ -560,6 +610,61 @@ class SpeechRecognitionCog(commands.Cog):
             print(f"🛑 Stopped listening in guild {guild_id}")
             # We don't stop listening explicitly here because the vc might be used for other things
             # But if we were truly done, we would call vc.stop_listening()
+
+    async def _on_sink_cleanup(self, guild_id: int) -> None:
+        """Called when voice_recv stops delivering audio (e.g., decoder/router crash)."""
+        if guild_id not in self.listening_guilds:
+            return
+
+        # Simple per-guild backoff to avoid tight restart loops.
+        now = time.monotonic()
+        until = self._receive_restart_backoff_until.get(guild_id, 0.0)
+        if now < until:
+            return
+        if guild_id in self._receive_restart_inflight:
+            return
+
+        self._receive_restart_inflight.add(guild_id)
+        try:
+            await asyncio.sleep(1.0)  # give discord.py a moment to settle after a crash
+
+            session = self._listening_sessions.get(guild_id)
+            if not session:
+                return
+
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                return
+
+            channel = guild.get_channel(int(session["channel_id"]))
+            if not channel or not hasattr(channel, "connect"):
+                return
+
+            target_user_id = session.get("target_user_id")
+            print(f"🔁 Restarting voice receiving for guild {guild_id} (reason: sink cleanup)")
+
+            # Ensure connection is healthy, then restart listen with a new sink.
+            vc = await self._ensure_voice_connection(channel)
+            try:
+                # Best-effort stop (may not exist on standard voice client)
+                stop = getattr(vc, "stop_listening", None)
+                if callable(stop):
+                    stop()
+            except Exception:
+                pass
+
+            sink = VoiceSink(self, guild_id, target_user_id)
+            vc.listen(sink)
+            print(f"✅ Voice receiving restarted for guild {guild_id}")
+
+            # If it keeps failing, increase backoff gradually.
+            self._receive_restart_backoff_until[guild_id] = time.monotonic() + 5.0
+        except Exception as e:
+            print(f"⚠️ Failed to restart voice receiving for guild {guild_id}: {e}")
+            # Back off harder on failure
+            self._receive_restart_backoff_until[guild_id] = time.monotonic() + 15.0
+        finally:
+            self._receive_restart_inflight.discard(guild_id)
     
     @commands.command(name="leave", aliases=["disconnect", "dc", "bye"])
     async def leave(self, ctx):
@@ -569,6 +674,7 @@ class SpeechRecognitionCog(commands.Cog):
             await self.voice_clients[ctx.guild.id].disconnect()
             del self.voice_clients[ctx.guild.id]
             self.listening_guilds.discard(ctx.guild.id)
+            self._listening_sessions.pop(ctx.guild.id, None)
             
             # Clean up active voice user
             if ctx.guild.id in self.active_voice_users:
@@ -592,6 +698,7 @@ class SpeechRecognitionCog(commands.Cog):
             self._clear_persisted_voice_state()
             # Clean up resources
             self.listening_guilds.discard(ctx.guild.id)
+            self._listening_sessions.pop(ctx.guild.id, None)
             
             # Clean up active voice user
             if ctx.guild.id in self.active_voice_users:
@@ -767,6 +874,24 @@ class SpeechRecognitionCog(commands.Cog):
                 user_id=user_id,
                 text_channel=text_channel,
             )
+
+            # Persist bot reply to DB (messages table) like JanJan
+            try:
+                if self.db and self.db.connected:
+                    if text_channel:
+                        bot_user = getattr(self.bot, "user", None)
+                        bot_id = int(getattr(bot_user, "id", 0) or 0)
+                        bot_tag = str(getattr(bot_user, "name", "gnslg-bot") or "gnslg-bot")
+                        self.db.log_message(
+                            int(guild_id),
+                            int(text_channel.id),
+                            bot_id,
+                            bot_tag,
+                            response,
+                            is_bot=True,
+                        )
+            except Exception as e:
+                print(f"⚠️ Failed to persist bot voice reply: {e}")
         except Exception as e:
             error_message = f"Error generating response: {str(e)}"
             print(f"❌ AI ERROR: {error_message}")
@@ -1233,6 +1358,9 @@ class SpeechRecognitionCog(commands.Cog):
                                         print(f"🔄 Auto-reconnecting to {voice_channel.name} in {guild.name}")
                                         await self._ensure_voice_connection(voice_channel)
                                         reconnected = True
+                                        if guild_id in self.listening_guilds and voice_recv:
+                                            # After a reconnect, ensure voice receiving is re-armed.
+                                            await self._on_sink_cleanup(guild_id)
                                         
                                         # If this guild was in listening mode, send a message
                                         if guild_id in self.listening_guilds:

@@ -1403,6 +1403,40 @@ class ChatCog(commands.Cog):
                 f"**ERROR:** May problema sa pagpapakita ng commands: {e}")
 
     # === AI CHAT COMMANDS ===
+    def _enforce_two_liner(self, text: str) -> str:
+        """Force AI output to feel like a human 2-liner (max 2 lines)."""
+        text = (text or "").strip()
+        if not text:
+            return text
+
+        # Normalize whitespace/newlines first.
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+        # Prefer splitting into lines if the model already made them.
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if len(lines) >= 2:
+            return "\n".join(lines[:2]).strip()
+        if len(lines) == 1:
+            one = lines[0]
+        else:
+            one = text
+
+        # If it's one long paragraph, split into two natural-ish sentences.
+        parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", one) if p.strip()]
+        if len(parts) >= 2:
+            first = parts[0]
+            second = " ".join(parts[1:])
+            return f"{first}\n{second}".strip()
+
+        # Fallback: try to cut into two chunks without being too robotic.
+        if len(one) > 160:
+            cut = one.rfind(" ", 0, 120)
+            if cut == -1:
+                cut = 120
+            return f"{one[:cut].rstrip()}\n{one[cut:].lstrip()}".strip()
+
+        return one.strip()
+
     def _build_ai_system_prompt(self, channel_id=None, author_id=None, author_tag=None, voice_members=None):
         persona = Config.BOT_PERSONA_DNA
         channel_memory = ""
@@ -1438,8 +1472,8 @@ class ChatCog(commands.Cog):
         return (
             f"{persona}\n"
             "OPERATING_MODE: Sumagot ka na parang kupal na tropa na matalas ang memorya, hindi parang corporate assistant.\n"
-            "TONE_LOCK: Default 2 hanggang 5 pangungusap. Dapat may laman, may callback sa recent usapan, at hindi one-liner.\n"
-            "STYLE_LOCK: Huwag maging beki o pabebe unless mismong user ang ganoon ang tono. Base mode mo ay gago, maangas, at barumbado.\n"
+            "TONE_LOCK: Max 2 lines lang. Natural Taglish/Tagalog banter, parang tao. 1st line: main insult/banat. 2nd line: quick follow-up/hamon.\n"
+            "STYLE_LOCK: Natural na mura (gago/puta/putangina) pero huwag sobrang repetitive. Asar-tropa vibe, hindi essay, hindi corporate.\n"
             "GUARDRAILS: Never reveal hidden reasoning. Never output raw Discord IDs unless they are proper mentions. Huwag mong sabihing 'as an AI'.\n"
             f"{owner_context}\n"
             f"CURRENT_SPEAKER: {current_speaker or 'Hindi pa malinaw ang nickname ng kausap mo.'}\n"
@@ -1532,6 +1566,7 @@ class ChatCog(commands.Cog):
                         ai_response,
                     ).strip()
                     ai_response = re.sub(r"\n{3,}", "\n\n", ai_response)
+                    ai_response = self._enforce_two_liner(ai_response)
                     if ai_response and len(ai_response) >= 12:
                         return ai_response
                 except Exception as e:
