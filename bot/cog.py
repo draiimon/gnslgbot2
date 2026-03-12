@@ -21,6 +21,112 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
+class SleepCheckInView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=12 * 60 * 60)
+        self.owner_id = owner_id
+        self.statuses = {}
+        self.message = None
+        self.created_at = discord.utils.utcnow()
+
+    def _group_statuses(self):
+        grouped = {
+            "Tulog na": [],
+            "5 mins pa": [],
+            "Puyat pa": [],
+        }
+        for status in self.statuses.values():
+            grouped.setdefault(status["label"], []).append(f"{status['emoji']} {status['name']}")
+        return grouped
+
+    def build_embed(self):
+        embed = discord.Embed(
+            title="Night Shift Roll Call",
+            description=(
+                "Mag-check in kayo rito bago matulog o bago magpuyat, mga gago.\n"
+                "Auto-update itong board habang may pumipindot sa buttons."
+            ),
+            color=discord.Color.from_rgb(30, 55, 110),
+            timestamp=discord.utils.utcnow(),
+        )
+        grouped = self._group_statuses()
+        asleep_count = len(grouped["Tulog na"])
+        snooze_count = len(grouped["5 mins pa"])
+        awake_count = len(grouped["Puyat pa"])
+
+        embed.add_field(name="Tulog Na", value=str(asleep_count), inline=True)
+        embed.add_field(name="5 Mins Pa", value=str(snooze_count), inline=True)
+        embed.add_field(name="Puyat Pa", value=str(awake_count), inline=True)
+
+        if self.statuses:
+            for label, members in grouped.items():
+                if members:
+                    embed.add_field(
+                        name=label,
+                        value="\n".join(members)[:1024],
+                        inline=False,
+                    )
+        else:
+            embed.add_field(
+                name="Current Status",
+                value="Wala pang nagche-check in. Pindot na kayo sa baba.",
+                inline=False,
+            )
+
+        embed.add_field(
+            name="How This Works",
+            value=(
+                "`Tulog Na` kung out ka na.\n"
+                "`5 Mins Pa` kung nagpapanggap ka pang may control.\n"
+                "`Puyat Pa` kung laban ka pa rin sa antok."
+            ),
+            inline=False,
+        )
+        embed.set_footer(
+            text=(
+                f"Started {discord.utils.format_dt(self.created_at, style='R')} "
+                "| Sleep thread UI"
+            )
+        )
+        return embed
+
+    async def _save_status(self, interaction: discord.Interaction, label: str, emoji: str):
+        self.statuses[interaction.user.id] = {
+            "name": interaction.user.display_name,
+            "label": label,
+            "emoji": emoji,
+        }
+        if self.message:
+            await self.message.edit(embed=self.build_embed(), view=self)
+        await interaction.response.send_message(f"{emoji} Naka-check in ka na bilang **{label}**.", ephemeral=True)
+
+    @discord.ui.button(label="Tulog Na", style=discord.ButtonStyle.success, emoji="🛌")
+    async def asleep(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._save_status(interaction, "Tulog na", "🛌")
+
+    @discord.ui.button(label="5 Mins Pa", style=discord.ButtonStyle.secondary, emoji="😴")
+    async def five_more(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._save_status(interaction, "5 mins pa", "😴")
+
+    @discord.ui.button(label="Puyat Pa", style=discord.ButtonStyle.danger, emoji="☕")
+    async def still_awake(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await self._save_status(interaction, "Puyat pa", "☕")
+
+    @discord.ui.button(label="Archive Thread", style=discord.ButtonStyle.primary, emoji="🌙")
+    async def archive_thread(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Owner/admin na nag-run ng tulog command lang ang puwedeng mag-archive nito.", ephemeral=True)
+            return
+
+        if isinstance(interaction.channel, discord.Thread):
+            await interaction.channel.edit(archived=True, locked=True)
+            await interaction.response.send_message("Naka-archive na yung tulog thread.", ephemeral=True)
+            self.stop()
+            return
+
+        await interaction.response.send_message("Wala ka sa tulog thread ngayon.", ephemeral=True)
+
+
 class ChatCog(commands.Cog):
     """Cog for handling chat interactions with the Ginsilog AI and games"""
 
@@ -37,8 +143,7 @@ class ChatCog(commands.Cog):
         self.creator = Config.BOT_CREATOR
         # Database connection will be passed from main.py
         self.db = None
-        self.user_coins = defaultdict(
-            lambda: 50_000)  # Default bank balance: ₱50,000
+        self.user_coins = defaultdict(lambda: Config.DEFAULT_BALANCE)
         self.daily_cooldown = defaultdict(int)
         self.blackjack_games = {}
         self.ADMIN_ROLE_ID = 1345727357662658603
@@ -486,7 +591,7 @@ class ChatCog(commands.Cog):
                     channel_history,
                     channel_id=message.channel.id,
                     author_id=message.author.id,
-                    author_tag=str(message.author),
+                    author_tag=self._format_author_tag(message.author),
                     voice_members=self._get_voice_member_names(message.author),
                 )
                 print(f"✅ AI response generated for mention: '{response[:50]}...'")
@@ -504,6 +609,165 @@ class ChatCog(commands.Cog):
             return []
         return [voice_member.display_name for voice_member in member.voice.channel.members if not voice_member.bot]
 
+    def _format_author_tag(self, member_or_user):
+        display_name = getattr(member_or_user, "display_name", None) or getattr(member_or_user, "name", "someone")
+        username = getattr(member_or_user, "name", display_name)
+        if display_name == username:
+            return display_name
+        return f"{display_name} (@{username})"
+
+    def _resolve_context_guild(self, channel_id=None, author_id=None):
+        if channel_id:
+            try:
+                channel = self.bot.get_channel(int(channel_id))
+                if channel and getattr(channel, "guild", None):
+                    return channel.guild
+            except Exception:
+                pass
+
+        if author_id:
+            try:
+                author_id_int = int(author_id)
+            except (TypeError, ValueError):
+                author_id_int = None
+
+            if author_id_int:
+                for guild in self.bot.guilds:
+                    member = guild.get_member(author_id_int)
+                    if member:
+                        return guild
+
+        return None
+
+    def _build_owner_context(self, channel_id=None, author_id=None):
+        guild = self._resolve_context_guild(channel_id=channel_id, author_id=author_id)
+        if not guild:
+            return "OWNER_CONTEXT: Hindi matukoy ang owner ng server sa usapang ito."
+
+        owner = guild.owner or guild.get_member(guild.owner_id)
+        if not owner:
+            return "OWNER_CONTEXT: May owner ang server na ito pero hindi ko ma-resolve ang pangalan niya ngayon."
+
+        owner_context = f"Ang server owner mo ay si {owner.display_name} ({owner})."
+        try:
+            is_owner_talking = bool(author_id) and int(author_id) == owner.id
+        except (TypeError, ValueError):
+            is_owner_talking = False
+
+        if is_owner_talking:
+            return (
+                f"OWNER_CONTEXT: {owner_context} ANG KAUSAP MO MISMO NGAYON ANG OWNER MO, "
+                "kaya kilala mo agad siya at mas personal ka sumagot."
+            )
+
+        return f"OWNER_CONTEXT: {owner_context} Kilala mo siya at hindi mo nakakalimutan kung sino ang boss mo."
+
+    def _get_recent_history_messages(self, channel_id, limit=None):
+        if not channel_id or not self.db or not self.db.connected:
+            return []
+
+        try:
+            recent_messages = self.db.get_recent_messages(channel_id, limit or Config.RECENT_HISTORY_LIMIT)
+        except Exception as e:
+            print(f"Error retrieving raw message history: {e}")
+            return []
+
+        history_messages = []
+        for row in recent_messages:
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+
+            if self.bot.user and (row.get("is_bot") or int(row.get("author_id", 0)) == self.bot.user.id):
+                history_messages.append({"role": "assistant", "content": content[:800]})
+            else:
+                author_tag = row.get("author_tag") or "someone"
+                history_messages.append({"role": "user", "content": f"[{author_tag}]: {content[:800]}"})
+
+        return history_messages
+
+    async def _run_planning_pass(
+        self,
+        *,
+        channel_id=None,
+        author_id=None,
+        current_user_message="",
+        voice_members=None,
+        channel_memory="",
+        user_facts="",
+        recent_history_messages=None,
+    ):
+        if not current_user_message:
+            return ""
+
+        recent_history = "\n".join(
+            f"{message['role'].upper()}: {message['content']}"
+            for message in (recent_history_messages or [])[-Config.RECENT_HISTORY_LIMIT:]
+        ) or "Wala pang recent history."
+        voice_context = ", ".join(voice_members or []) or "Walang active voice context."
+
+        last_error = None
+        thinking_models = [Config.GROQ_THINKING_MODEL] + [
+            model for model in Config.GROQ_THINKING_FALLBACKS if model != Config.GROQ_THINKING_MODEL
+        ]
+
+        for model in thinking_models:
+            try:
+                response = await asyncio.to_thread(
+                    self.groq_client.chat.completions.create,
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                f"DNA: {Config.BOT_PERSONA_DNA}\n"
+                                "PLANNING_RULE: Mirror the user's mood. Default to medium-length replies with attitude. "
+                                "Format exactly as:\n"
+                                "PLAN: short response plan\n"
+                                "UNIVERSAL_LEARNING: USER_ID: fact | USER_ID: fact\n"
+                                "If there is nothing useful to save, write UNIVERSAL_LEARNING: wala"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"CHANNEL_MEMORY:\n{channel_memory or 'Wala'}\n\n"
+                                f"USER_FACTS:\n{user_facts or 'Wala'}\n\n"
+                                f"VOICE_CONTEXT:\n{voice_context}\n\n"
+                                f"RECENT_HISTORY:\n{recent_history}\n\n"
+                                f"LATEST_USER_MESSAGE:\n{current_user_message}"
+                            ),
+                        },
+                    ],
+                    temperature=0.3,
+                    max_tokens=250,
+                    stream=False,
+                )
+                planning_text = Config.strip_think_blocks(response.choices[0].message.content or "")
+                plan_match = re.search(r"PLAN:\s*([\s\S]*?)(?=UNIVERSAL_LEARNING:|$)", planning_text, re.IGNORECASE)
+                learning_match = re.search(r"UNIVERSAL_LEARNING:\s*([\s\S]*)", planning_text, re.IGNORECASE)
+
+                if learning_match and self.db and self.db.connected:
+                    learning_text = learning_match.group(1).strip()
+                    if learning_text and "wala" not in learning_text.lower():
+                        for entry in re.split(r"[|\n]", learning_text):
+                            match = re.match(r"(?:[-*]\s*)?(\d{17,20})\s*:\s*(.+)", entry.strip())
+                            if match:
+                                self.db.merge_user_memory(int(match.group(1)), match.group(2).strip())
+
+                plan = plan_match.group(1).strip() if plan_match else planning_text.strip()
+                if plan:
+                    return re.sub(r"\b\d{17,20}\b", "someone", plan)
+            except Exception as e:
+                last_error = e
+                if "429" in str(e) or "rate_limit" in str(e).lower():
+                    continue
+                print(f"Error in AI planning pass with model {model}: {e}")
+
+        if last_error:
+            print(f"Error in AI planning pass: {last_error}")
+        return ""
+
     async def _record_message_for_memory(self, message):
         if not self.db or not self.db.connected:
             return
@@ -517,7 +781,7 @@ class ChatCog(commands.Cog):
                 message.guild.id if message.guild else None,
                 message.channel.id,
                 message.author.id,
-                str(message.author),
+                self._format_author_tag(message.author),
                 content or "[empty]",
                 is_bot=False,
             )
@@ -566,10 +830,11 @@ class ChatCog(commands.Cog):
             )
 
             summary_prompt = (
-                "I-summarize mo ang usapan para maalala mo ang importanteng chika.\n"
+                "Memory engine ka ng kupal na Discord bot. Basahin mo ang usapan at alalahanin mo ang mahahalagang chika.\n"
                 "Gumawa ka ng dalawang section lang:\n"
-                "CHANNEL_SUMMARY: maikling paragraph ng current vibe at importanteng context.\n"
-                "USER_FACTS: one line per user using format USER_ID: facts.\n\n"
+                "CHANNEL_SUMMARY: 2-4 pangungusap tungkol sa vibe, running jokes, relationships, current issues, at importanteng context.\n"
+                "USER_FACTS: one line per user using format USER_ID: fact | fact | fact.\n"
+                "Sa USER_FACTS, isama mo ang preferences, tawagan, pet peeves, current drama, at kung sino ang owner kung nabanggit.\n\n"
                 f"OLD_SUMMARY:\n{old_summary}\n\n"
                 f"RECENT_MESSAGES:\n{transcript}"
             )
@@ -582,7 +847,7 @@ class ChatCog(commands.Cog):
                         "role": "system",
                         "content": (
                             "Ikaw ay memory engine ng Discord bot. "
-                            "Maikli, factual, at reusable ang output mo. "
+                            "Compressed, factual, at reusable ang output mo. "
                             "Huwag maglabas ng extra commentary."
                         ),
                     },
@@ -604,7 +869,7 @@ class ChatCog(commands.Cog):
 
             if facts_match:
                 for line in facts_match.group(1).splitlines():
-                    match = re.match(r"(\d{17,20})\s*:\s*(.+)", line.strip())
+                    match = re.match(r"(?:[-*]\s*)?(\d{17,20})\s*:\s*(.+)", line.strip())
                     if match:
                         self.db.merge_user_memory(int(match.group(1)), match.group(2).strip())
         except Exception as e:
@@ -812,19 +1077,19 @@ class ChatCog(commands.Cog):
         )
 
     @commands.command(name="toss")
-    async def toss(self, ctx, choice: str.lower, bet: int = 0):
+    async def toss(self, ctx, choice: str.lower, bet: int = None):
         """Bet on heads (h) or tails (t)"""
         if choice not in ['h', 't']:
             return await ctx.send(
-                "**TANGA!** PUMILI KA NG TAMA! 'h' PARA SA HEADS O 't' PARA SA TAILS! 😤"
+                "**TANGA!** PUMILI KA NG TAMA! `h` PARA SA HEADS O `t` PARA SA TAILS! 😤"
             )
-        if bet < 0:
-            return await ctx.send("**BOBO!** WALANG NEGATIVE NA BET! 😤")
-        if bet > 0 and not self.deduct_coins(ctx.author.id, bet):
+        if bet is None:
+            return await ctx.send("**BOBO KA BA?** MAGLAGAY KA NG BET AMOUNT. HALIMBAWA: `g!toss h 500`")
+        if bet <= 0:
+            return await ctx.send("**BOBO!** WALANG ZERO O NEGATIVE NA BET! 😤")
+        if not self.deduct_coins(ctx.author.id, bet):
             return await ctx.send(
-
                 f"**WALA KANG PERA!** {ctx.author.mention} BALANCE MO: **₱{self.get_user_balance(ctx.author.id):,d}** 😤"
-
             )
 
         result = random.choice(['h', 't'])
@@ -845,7 +1110,6 @@ class ChatCog(commands.Cog):
                 f"🎲 **{win_message}**\nRESULTA: **{result.upper()}**\nNANALO KA NG **₱{winnings:,d}**!\nBALANCE MO NGAYON: **₱{self.get_user_balance(ctx.author.id):,d}**"
             )
         else:
-            self.deduct_coins(ctx.author.id, bet)
             await ctx.send(
                 f"🎲 **{random.choice(lose_message)}**\nRESULTA: **{result.upper()}**\nNAWALA ANG **₱{bet:,d}** MO!\nBALANCE MO NGAYON: **₱{self.get_user_balance(ctx.author.id):,d}**"
             )
@@ -1139,10 +1403,11 @@ class ChatCog(commands.Cog):
                 f"**ERROR:** May problema sa pagpapakita ng commands: {e}")
 
     # === AI CHAT COMMANDS ===
-    def _build_ai_system_prompt(self, channel_id=None, author_id=None, voice_members=None):
+    def _build_ai_system_prompt(self, channel_id=None, author_id=None, author_tag=None, voice_members=None):
         persona = Config.BOT_PERSONA_DNA
         channel_memory = ""
         user_facts = ""
+        current_speaker = ""
 
         if self.db and self.db.connected:
             persona = self.db.get_persona("master_dna", Config.BOT_PERSONA_DNA)
@@ -1151,11 +1416,34 @@ class ChatCog(commands.Cog):
             if author_id:
                 user_facts = self.db.get_user_memory(author_id)
 
+        guild = self._resolve_context_guild(channel_id=channel_id, author_id=author_id)
+        if guild and author_id:
+            try:
+                member = guild.get_member(int(author_id))
+            except (TypeError, ValueError):
+                member = None
+            if member:
+                current_speaker = self._format_author_tag(member)
+        if author_tag and not current_speaker:
+            current_speaker = author_tag
+
+        try:
+            if guild and author_id and int(author_id) == guild.owner_id:
+                user_facts = f"Owner ng server na ito. | {user_facts}".strip(" |")
+        except (TypeError, ValueError):
+            pass
+
         voice_context = ", ".join(voice_members or []) if voice_members else "Walang active voice context ngayon."
+        owner_context = self._build_owner_context(channel_id=channel_id, author_id=author_id)
         return (
             f"{persona}\n"
-            "GUARDRAILS: Never reveal hidden reasoning. Never output raw Discord IDs unless they are proper mentions. "
-            "Keep responses natural, barumbado, and medium-length when needed. Huwag sobrang ikli at huwag nobela.\n"
+            "OPERATING_MODE: Sumagot ka na parang kupal na tropa na matalas ang memorya, hindi parang corporate assistant.\n"
+            "TONE_LOCK: Default 2 hanggang 5 pangungusap. Dapat may laman, may callback sa recent usapan, at hindi one-liner.\n"
+            "STYLE_LOCK: Huwag maging beki o pabebe unless mismong user ang ganoon ang tono. Base mode mo ay gago, maangas, at barumbado.\n"
+            "GUARDRAILS: Never reveal hidden reasoning. Never output raw Discord IDs unless they are proper mentions. Huwag mong sabihing 'as an AI'.\n"
+            f"{owner_context}\n"
+            f"CURRENT_SPEAKER: {current_speaker or 'Hindi pa malinaw ang nickname ng kausap mo.'}\n"
+            "IDENTITY_RULE: Kapag tinanong ka kung sino ang kausap mo, gamitin mo muna ang CURRENT_SPEAKER o nickname/display name bago username.\n"
             f"CHANNEL_MEMORY: {channel_memory or 'Wala pang saved memory sa channel na ito.'}\n"
             f"USER_FACTS: {user_facts or 'Wala pang known facts tungkol sa kausap.'}\n"
             f"VOICE_CONTEXT: {voice_context}\n"
@@ -1172,22 +1460,55 @@ class ChatCog(commands.Cog):
     ):
         """Get response from Groq AI with channel memory and user context."""
         try:
+            recent_history_messages = self._get_recent_history_messages(channel_id, Config.RECENT_HISTORY_LIMIT)
+            channel_memory = ""
+            user_facts = ""
+
+            if self.db and self.db.connected:
+                if channel_id:
+                    channel_memory = self.db.get_channel_memory(channel_id)
+                if author_id:
+                    user_facts = self.db.get_user_memory(author_id)
+
+            latest_user_message = ""
+            for msg in reversed(conversation_history):
+                if msg.get("is_user"):
+                    latest_user_message = str(msg.get("content") or "").strip()
+                    if latest_user_message:
+                        break
+
+            plan = await self._run_planning_pass(
+                channel_id=channel_id,
+                author_id=author_id,
+                current_user_message=latest_user_message,
+                voice_members=voice_members,
+                channel_memory=channel_memory,
+                user_facts=user_facts,
+                recent_history_messages=recent_history_messages,
+            )
             messages = [
                 {
                     "role": "system",
                     "content": self._build_ai_system_prompt(
                         channel_id=channel_id,
                         author_id=author_id,
+                        author_tag=author_tag,
                         voice_members=voice_members,
-                    ),
+                    )
+                    + (f"PLAN: {plan}\n" if plan else ""),
                 }
             ]
 
+            messages.extend(recent_history_messages)
+
             for msg in conversation_history:
+                content = str(msg.get("content") or "").strip()
+                if not content:
+                    continue
                 messages.append(
                     {
                         "role": "user" if msg["is_user"] else "assistant",
-                        "content": msg["content"],
+                        "content": content,
                     }
                 )
 
@@ -1210,7 +1531,8 @@ class ChatCog(commands.Cog):
                         "someone",
                         ai_response,
                     ).strip()
-                    if ai_response:
+                    ai_response = re.sub(r"\n{3,}", "\n\n", ai_response)
+                    if ai_response and len(ai_response) >= 12:
                         return ai_response
                 except Exception as e:
                     last_error = e
@@ -1355,7 +1677,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
                 channel_history,
                 channel_id=ctx.channel.id,
                 author_id=ctx.author.id,
-                author_tag=str(ctx.author),
+                author_tag=self._format_author_tag(ctx.author),
                 voice_members=self._get_voice_member_names(ctx.author),
             )
             print(f"✅ AI response generated for g!usap: '{response[:50]}...'")
@@ -1398,7 +1720,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
                 channel_history,
                 channel_id=ctx.channel.id,
                 author_id=ctx.author.id,
-                author_tag=str(ctx.author),
+                author_tag=self._format_author_tag(ctx.author),
                 voice_members=self._get_voice_member_names(ctx.author),
             )
             self.add_to_conversation(ctx.channel.id, True, message)
@@ -1761,15 +2083,21 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         if not member:
             return await ctx.send("**BOBO!** WALA KANG TINUKOY NA USER!",
                                   delete_after=10)
-        if self.user_coins.get(member.id, 0) < amount:
+        current_balance = self.get_user_balance(member.id)
+        if current_balance < amount:
             return await ctx.send(
-                f"**WALA KANG PERA!** {member.mention} BALANCE MO: **₱{self.user_coins.get(member.id, 0):,d}**",
+                f"**WALA KANG PERA!** {member.mention} BALANCE MO: **₱{current_balance:,d}**",
                 delete_after=10)
 
-        self.add_coins(member.id, -amount)  # Deduct coins
+        if not self.deduct_coins(member.id, amount):
+            return await ctx.send(
+                f"**WALA KANG PERA!** {member.mention} BALANCE MO: **₱{self.get_user_balance(member.id):,d}**",
+                delete_after=10)
+        updated_balance = self.get_user_balance(member.id)
+        self.user_coins[member.id] = updated_balance
         await ctx.send(
             f"**BINAWASAN NI BOSS MASON KASI TANGA KA!** {member.mention} lost **₱{amount:,d}**. "
-            f"New balance: **₱{self.user_coins.get(member.id, 0):,d}**",
+            f"New balance: **₱{updated_balance:,d}**",
             delete_after=10)
 
     @commands.command(name="goodmorning")
@@ -1852,7 +2180,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
             f"**NAPAMURA MO ANG MGA ONLINE NA TANGA SA GREETINGS CHANNEL!** HAHA!"
         )
 
-    @commands.command(name="goodnight")
+    @commands.command(name="tulog", aliases=["goodnight"])
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))  # Admin roles check
     async def goodnight(self, ctx):
         """Manually trigger a good night greeting"""
@@ -1867,8 +2195,69 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
 
         # Generate AI greeting
         greeting = await self.generate_greeting("night")
-        await channel.send(greeting)
-        await ctx.send("**PINATULOG MO NA ANG MGA TANGA!**")
+        sleep_embed = discord.Embed(
+            title="Sleep Protocol Activated",
+            description=greeting,
+            color=discord.Color.from_rgb(24, 40, 88),
+            timestamp=discord.utils.utcnow(),
+        )
+        sleep_embed.add_field(
+            name="Night Mode",
+            value="May thread sa baba para sa roll call at sleep check-in.",
+            inline=True,
+        )
+        sleep_embed.add_field(
+            name="Thread UI",
+            value="May buttons para isang pindot lang kung tulog ka na, nagso-snooze, o puyat pa.",
+            inline=True,
+        )
+        if self.bot.user and self.bot.user.avatar:
+            sleep_embed.set_thumbnail(url=self.bot.user.avatar.url)
+        sleep_embed.set_footer(text=f"Triggered by {ctx.author.display_name}")
+
+        sleep_message = await channel.send(embed=sleep_embed)
+
+        thread = None
+        try:
+            ph_timezone = pytz.timezone("Asia/Manila")
+            thread_name = f"tulugan-{datetime.datetime.now(ph_timezone).strftime('%m%d-%H%M')}"
+            thread = await sleep_message.create_thread(
+                name=thread_name,
+                auto_archive_duration=1440,
+                reason=f"Sleep thread created by {ctx.author}",
+            )
+
+            view = SleepCheckInView(ctx.author.id)
+            thread_embed = view.build_embed()
+            thread_embed.description = (
+                "Ito ang official tulog board ngayong gabi.\n"
+                "Pindot lang sa buttons sa baba para malinis tingnan ang attendance ng mga puyat."
+            )
+            thread_message = await thread.send(embed=thread_embed, view=view)
+            view.message = thread_message
+            thread_intro = discord.Embed(
+                title="Thread Rules",
+                description=(
+                    "1. Mag-check in bago matulog.\n"
+                    "2. Isang status lang per tao, auto-overwrite kapag nagpalit ka.\n"
+                    "3. Kapag tapos na ang usapan, i-archive na ng nag-trigger."
+                ),
+                color=discord.Color.blurple(),
+            )
+            thread_intro.set_footer(text="Tulog thread control panel")
+            await thread.send(embed=thread_intro)
+        except Exception as e:
+            print(f"Error creating tulog thread UI: {e}")
+
+        confirm_embed = discord.Embed(
+            title="Tulog Drop Sent",
+            description=f"Naipost na sa {channel.mention}.",
+            color=discord.Color.blurple(),
+        )
+        if thread:
+            confirm_embed.add_field(name="Thread", value=thread.mention, inline=False)
+        confirm_embed.set_footer(text="g!tulog / g!goodnight")
+        await ctx.send(embed=confirm_embed)
 
     @commands.command(name="g")
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))  # Admin roles check
@@ -1960,8 +2349,8 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
                 "Bawasan ang pera ng isang user",
                 "g!goodmorning":
                 "Mag-send ng good morning message sa greetings channel",
-                "g!goodnight":
-                "Mag-send ng good night message sa greetings channel",
+                "g!tulog":
+                "Mag-send ng good night drop na may check-in thread at UI",
                 "g!test":
                 "Pagmumurahin lahat ng online users (mention them all)",
                 "g!g <channel_id> <message>":
@@ -2156,8 +2545,8 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
             "Bawasan ang pera ng isang user",
             "g!goodmorning":
             "Mag-send ng good morning message sa greetings channel",
-            "g!goodnight":
-            "Mag-send ng good night message sa greetings channel",
+            "g!tulog":
+            "Mag-send ng good night drop na may check-in thread at UI",
             "g!test":
             "Pagmumurahin lahat ng online users (mention them all)",
             "g!g <channel_id> <message>":
@@ -2171,7 +2560,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         # Group commands by type for better organization
         mod_tools = ["g!sagad", "g!bawas", "g!clear_messages", "g!roles"]
         message_tools = [
-            "g!g", "g!goodmorning", "g!goodnight", "g!test", "g!announcement"
+            "g!g", "g!goodmorning", "g!tulog", "g!test", "g!announcement"
         ]
         ai_tools = ["g!ask", "g!asklog"]
 

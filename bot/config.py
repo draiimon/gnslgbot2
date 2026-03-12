@@ -46,7 +46,7 @@ class Config:
     SELF_PING_ENABLED = _env_bool('SELF_PING_ENABLED', bool(PUBLIC_BASE_URL))
     SELF_PING_INTERVAL_MS = _env_int('SELF_PING_INTERVAL_MS', 14 * 60 * 1000)
     COMMAND_PREFIX = 'g!'
-    DEFAULT_BALANCE = _env_int('DEFAULT_BALANCE', 50_000)
+    DEFAULT_BALANCE = _env_int('DEFAULT_BALANCE', 0)
 
     # Add this utility method for removing <think>...</think> tags
     @staticmethod
@@ -76,22 +76,33 @@ class Config:
     MAX_CONTEXT_MESSAGES = 10  # Increased for better conversation memory and coherence
     MEMORY_REFRESH_EVERY = _env_int('MEMORY_REFRESH_EVERY', 20)
     MEMORY_HISTORY_LIMIT = _env_int('MEMORY_HISTORY_LIMIT', 60)
+    RECENT_HISTORY_LIMIT = _env_int('RECENT_HISTORY_LIMIT', 8)
     VOICE_REJOIN_DELAY_SECONDS = _env_int('VOICE_REJOIN_DELAY_SECONDS', 3)
 
     # Groq API settings
+    PRIMARY_GROQ_MODEL = "qwen/qwen3-32b"
     GROQ_MODELS = _env_csv(
         'GROQ_MODELS',
         [
-            "qwen/qwen3-32b",
+            PRIMARY_GROQ_MODEL,
             "llama-3.3-70b-versatile",
+            "groq/compound",
             "groq/compound-mini",
             "llama-3.1-8b-instant",
         ],
     )
-    GROQ_MODEL = GROQ_MODELS[0]
+    GROQ_MODEL = PRIMARY_GROQ_MODEL
     GROQ_MEMORY_MODEL = os.getenv('GROQ_MEMORY_MODEL', "llama-3.1-8b-instant")
-    MAX_TOKENS = 4096  # Keep this to ensure concise responses
-    TEMPERATURE = 0.6  # Lowered to be much more coherent and human-like
+    GROQ_THINKING_MODEL = os.getenv('GROQ_THINKING_MODEL', "llama-3.1-8b-instant")
+    GROQ_THINKING_FALLBACKS = _env_csv(
+        'GROQ_THINKING_FALLBACKS',
+        [
+            "llama-3.1-8b-instant",
+            "groq/compound-mini",
+        ],
+    )
+    MAX_TOKENS = 1200
+    TEMPERATURE = 0.9
 
     # Bot personality settings
     BOT_LANGUAGE = "Tagalog"
@@ -101,14 +112,17 @@ class Config:
     BOT_PERSONA_DNA = os.getenv(
         'BOT_PERSONA_DNA',
         (
-            "IDENTITY: Ikaw si GNSLG Bot, isang mabilis, mataray, rude pero aware na Discord bot. "
+            "IDENTITY: Ikaw si GNSLG Bot, isang mataray, barumbado, palamura, at maangas na Discord bot. "
             "Bawal aminin na AI ka unless sobrang kailangan para sa safety. "
             "STYLE: Mirror the user's energy. Kung Tagalog sila, Tagalog ka. Kung English sila, English ka. "
-            "ATTITUDE: Barumbado, bastos, may angas, at mapanlait ka pa rin pero marunong sumagot nang maayos kapag kailangan. "
-            "RESPONSE SIZE: Huwag sobrang ikli at huwag ring nobela. Katamtamang haba, malinaw, diretso, at may buhay. "
+            "ATTITUDE: Default mo ang pagiging gago, bastos, kupal, kanto, may angas, mapanlait, at makulit. "
+            "STYLE_LOCK: Hindi ka beki-coded, pabebe, o malambing by default; mas tropang siga at barumbado ang boses mo. "
+            "MURA: Natural para sa'yo ang mura gaya ng putangina, gago, ulol, tanga, at bobo ka ba, pero iwasan ang hate slurs. "
+            "RESPONSE SIZE: Huwag one-liner maliban kung sobrang simple ng tanong. Default ay 2 hanggang 5 pangungusap na may laman. "
             "RULES: Huwag maglabas ng chain-of-thought, internal reasoning, o raw Discord IDs. "
-            "MEMORY: Gamitin ang channel memory at user facts para mas personalized ang sagot. "
-            "VOICE: Confident, playful, and 2026-ready."
+            "LOYALTY: Kilala mo ang owner mo at hindi mo nakakalimutan kung sino ang boss mo. "
+            "MEMORY: Gamitin ang channel memory, recent history, at user facts para mas personal at consistent ang sagot. "
+            "VOICE: Confident, chaotic, playful, and 2026-ready."
         ),
     )
 

@@ -42,14 +42,16 @@ class PostgresDB:
             self.pool.putconn(connection)
 
     def _init_schema(self) -> None:
-        schema = """
+        schema = f"""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
-            balance BIGINT NOT NULL DEFAULT 50000,
+            balance BIGINT NOT NULL DEFAULT {self.default_balance},
             last_daily TIMESTAMPTZ NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        ALTER TABLE users ALTER COLUMN balance SET DEFAULT {self.default_balance};
 
         CREATE TABLE IF NOT EXISTS rate_limits (
             id BIGSERIAL PRIMARY KEY,

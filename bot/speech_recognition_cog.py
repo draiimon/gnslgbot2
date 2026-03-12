@@ -1,17 +1,16 @@
 import asyncio
-import discord
-import os
-import io
-import time
-import json
-import threading
-import subprocess
-import logging
-import sys
-import wave
 import collections
+import logging
+import os
+import sys
+import time
+import wave
+
+import discord
 from discord.ext import commands
 from groq import Groq
+
+from bot.config import Config
 from bot.runtime_config import can_use_audio_features
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -43,12 +42,6 @@ except ImportError:
     edge_tts = None
     AudioSegment = None
     voice_recv = None
-
-from discord.ext import commands  # Make sure we always have commands
-from groq import Groq
-import wave
-import collections
-
 
 # Define base class handling for when dependency is missing
 AudioSinkBase = voice_recv.AudioSink if voice_recv else object
@@ -131,9 +124,12 @@ class VoiceSink(AudioSinkBase):
                             self.audio_data = bytearray()  # Clear for next recording
                             print(f"🔇 Silence detected from {user.display_name}, processing audio ({len(audio_to_process)} bytes)")
                             
-                            # Mark as processing to prevent overlapping transcriptions
-                            self.processing = True
-                            asyncio.run_coroutine_threadsafe(self.process_audio(user, audio_to_process), self.cog.bot.loop)
+                            if len(audio_to_process) < 96000:
+                                print(f"â­ï¸ Skipping short audio clip ({len(audio_to_process)} bytes)")
+                            else:
+                                # Mark as processing to prevent overlapping transcriptions
+                                self.processing = True
+                                asyncio.run_coroutine_threadsafe(self.process_audio(user, audio_to_process), self.cog.bot.loop)
                         else:
                             # Already processing, discard this audio to prevent queue buildup
                             print(f"⏭️ Skipping audio from {user.display_name} - still processing previous speech")
@@ -188,7 +184,12 @@ class VoiceSink(AudioSinkBase):
                                     # Disconnect logic...
                             else:
                                 # Process as a question
-                                await self.cog.handle_voice_command(self.guild_id, user.id if user else 0, text)
+                                await self.cog.handle_voice_command(
+                                    self.guild_id,
+                                    user.id if user else 0,
+                                    text,
+                                    text_channel=self.cog._pick_text_channel(self.guild_id),
+                                )
                                 
                     except Exception as e:
                         if "429" in str(e):
@@ -256,7 +257,10 @@ class SpeechRecognitionCog(commands.Cog):
         
         # Initialize Groq client
         try:
-            self.groq_client = Groq()
+            self.groq_client = Groq(
+                api_key=Config.GROQ_API_KEY,
+                base_url="https://api.groq.com",
+            )
             print("✅ Groq client initialized for STT")
         except Exception as e:
             print(f"⚠️ Failed to initialize Groq client: {e}")
@@ -291,6 +295,36 @@ class SpeechRecognitionCog(commands.Cog):
         if not self.voice_state_restored:
             self.voice_state_restored = True
             self.bot.loop.create_task(self._restore_saved_voice_state())
+
+    def _pick_text_channel(self, guild_id):
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return None
+
+        for channel in guild.text_channels:
+            try:
+                if channel.permissions_for(guild.me).send_messages:
+                    return channel
+            except Exception:
+                continue
+
+        return None
+
+    def _tts_available(self):
+        return edge_tts is not None
+
+    async def _deliver_voice_or_text(self, guild_id, message, *, user_id=None, text_channel=None):
+        if self._tts_available():
+            await self.speak_message(guild_id, message, user_id=user_id)
+            return
+
+        if text_channel:
+            await text_channel.send(message)
+            return
+
+        fallback_channel = self._pick_text_channel(guild_id)
+        if fallback_channel:
+            await fallback_channel.send(message)
 
     def _persist_voice_state(self, guild_id, channel_id):
         if not self.db or not self.db.connected:
@@ -390,6 +424,10 @@ class SpeechRecognitionCog(commands.Cog):
         if not message:
             await ctx.send("**LOKO KA BA?** Tell me what to say!")
             return
+
+        if not self._tts_available():
+            await ctx.send("❌ TTS is unavailable on this host right now.")
+            return
             
         if not ctx.author.voice:
             await ctx.send("**TANGA KA!** You need to be in a voice channel first!")
@@ -438,7 +476,17 @@ class SpeechRecognitionCog(commands.Cog):
         # DIRECT QUESTION MODE - Process the question immediately if provided with the command
         if question:
             # Process the question directly
-            await self.handle_voice_command(ctx.guild.id, ctx.author.id, question)
+            await self.handle_voice_command(
+                ctx.guild.id,
+                ctx.author.id,
+                question,
+                text_channel=ctx.channel,
+            )
+            return
+
+        if not voice_recv:
+            self.listening_guilds.discard(ctx.guild.id)
+            await ctx.send("❌ Live STT listening is unavailable on this host right now. Gumamit ka muna ng `g!ask <tanong>` para direct reply.")
             return
         
         # LISTENING MODE - If no question was provided, start listening mode
@@ -603,7 +651,7 @@ class SpeechRecognitionCog(commands.Cog):
         # This change was made as per the user's request to prevent automatic responses to messages
         # Users must now use g!ask explicitly
     
-    async def handle_voice_command(self, guild_id, user_id, command):
+    async def handle_voice_command(self, guild_id, user_id, command, *, text_channel=None):
         """Process a voice command from a user"""
         print(f"🗣️ Processing voice command from user {user_id}: '{command}'")
         
@@ -652,7 +700,12 @@ class SpeechRecognitionCog(commands.Cog):
             try:
                 self.db.set_user_voice_preference(user_id, gender)  # type: ignore
                 gender_name = "male" if gender == "m" else "female"
-                await self.speak_message(guild_id, f"Sige. {gender_name} voice na ako ngayon, gago.")
+                await self._deliver_voice_or_text(
+                    guild_id,
+                    f"Sige. {gender_name} voice na ako ngayon, gago.",
+                    user_id=user_id,
+                    text_channel=text_channel,
+                )
                 print(f"✅ User {user_id} changed voice preference to {gender_name} through AI")
                 return True
             except Exception as e:
@@ -664,7 +717,12 @@ class SpeechRecognitionCog(commands.Cog):
         # First, check if we have the AI response handler
         if not self.get_ai_response:
             print("❌ ERROR: No AI response handler available!")
-            await self.speak_message(guild_id, "Sorry, I can't process AI responses right now. The AI handler is not connected properly.")
+            await self._deliver_voice_or_text(
+                guild_id,
+                "Sorry, I can't process AI responses right now. The AI handler is not connected properly.",
+                user_id=user_id,
+                text_channel=text_channel,
+            )
             return
         else:
             print("✅ AI response handler is available")
@@ -674,12 +732,6 @@ class SpeechRecognitionCog(commands.Cog):
         if not guild:
             print(f"❌ ERROR: Could not find guild with ID {guild_id}")
             return
-        
-        # Don't send logs to any channel for voice commands (g!ask)
-        # Only log to console and speak the response
-        text_channel = None
-        
-        # Skip the error for having no text channel - we deliberately don't want one here
         
         # Get the member
         member = guild.get_member(int(user_id))
@@ -702,24 +754,37 @@ class SpeechRecognitionCog(commands.Cog):
                 conversation,
                 channel_id=guild.voice_client.channel.id if guild.voice_client and guild.voice_client.channel else None,
                 author_id=user_id,
-                author_tag=str(member),
+                author_tag=f"{member.display_name} (@{member.name})" if member.display_name != member.name else member.display_name,
                 voice_members=[m.display_name for m in guild.voice_client.channel.members if not m.bot]
                 if guild.voice_client and guild.voice_client.channel
                 else None,
             )
             print(f"✅ AI response generated: '{response[:50]}...'")
             
-            # No text channel logging - only speak the response
-            await self.speak_message(guild_id, response)
+            await self._deliver_voice_or_text(
+                guild_id,
+                response,
+                user_id=user_id,
+                text_channel=text_channel,
+            )
         except Exception as e:
             error_message = f"Error generating response: {str(e)}"
             print(f"❌ AI ERROR: {error_message}")
             import traceback
             traceback.print_exc()
-            await self.speak_message(guild_id, "Sorry, I encountered an error processing your request.")
+            await self._deliver_voice_or_text(
+                guild_id,
+                "Sorry, I encountered an error processing your request.",
+                user_id=user_id,
+                text_channel=text_channel,
+            )
     
     async def speak_message(self, guild_id, message, user_id=None):
         """Use TTS to speak a message in the voice channel using in-memory processing"""
+        if not self._tts_available():
+            print(f"⚠️ TTS runtime unavailable for guild {guild_id}")
+            return
+
         # Check if we're connected to voice and try to reconnect if needed
         if guild_id not in self.voice_clients or not self.voice_clients[guild_id].is_connected():
             # Try to reconnect if we know the channel
@@ -763,6 +828,11 @@ class SpeechRecognitionCog(commands.Cog):
     
     async def process_tts_queue(self, guild_id):
         """Process messages in the TTS queue using in-memory approach"""
+        if not self._tts_available():
+            print(f"⚠️ Skipping TTS queue for guild {guild_id} because edge_tts is unavailable")
+            self.tts_queue[guild_id] = []
+            return
+
         if guild_id not in self.tts_queue or not self.tts_queue[guild_id]:
             return
         
@@ -1033,8 +1103,17 @@ class SpeechRecognitionCog(commands.Cog):
             
             if question:
                 # Process and answer the question directly - ultra clean flow
-                await self.handle_voice_command(ctx.guild.id, ctx.author.id, question)
+                await self.handle_voice_command(
+                    ctx.guild.id,
+                    ctx.author.id,
+                    question,
+                    text_channel=ctx.channel,
+                )
             else:
+                if not voice_recv:
+                    await ctx.send("❌ Live STT listening is unavailable on this host right now. Gumamit ka muna ng `g!ask <tanong>` para direct reply.")
+                    return
+
                 # Check if someone else is already using voice in this guild
                 if ctx.guild.id in self.active_voice_users:
                     active_user_id = self.active_voice_users[ctx.guild.id]
@@ -1117,7 +1196,12 @@ class SpeechRecognitionCog(commands.Cog):
             
             # Confirm the change via voice message
             await ctx.send(f"**VOICE CHANGED TO {gender_name.upper()}!** 👨 🔊")
-            await self.speak_message(ctx.guild.id, f"Voice changed to {gender_name}. This is how I sound now!", user_id=ctx.author.id)
+            await self._deliver_voice_or_text(
+                ctx.guild.id,
+                f"Voice changed to {gender_name}. This is how I sound now!",
+                user_id=ctx.author.id,
+                text_channel=ctx.channel,
+            )
             
         except Exception as e:
             await ctx.send(f"❌ **ERROR:** {str(e)}")
