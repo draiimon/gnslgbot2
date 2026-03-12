@@ -7,11 +7,17 @@ import json
 import threading
 import subprocess
 import logging
+import sys
 import wave
 import collections
 from discord.ext import commands
 from groq import Groq
 from bot.runtime_config import can_use_audio_features
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # Suppress noisy voice_recv logs BEFORE importing the library
 logging.getLogger('discord.ext.voice_recv.reader').setLevel(logging.WARNING)
@@ -235,13 +241,15 @@ class SpeechRecognitionCog(commands.Cog):
         
         # Default voice settings
         self.default_voice = "en-US-GuyNeural"
-        # Voice preferences now stored in Firebase only
+        # Voice preferences now stored in Postgres
         
         # Track most recently active users in each guild for voice preferences
         self.last_user_speech = {}  # user_id: timestamp
         
         # Database connection (will be set from main.py)
         self.db = None
+        self.saved_voice_state = None
+        self.voice_state_restored = False
         
         # Get Groq client from the bot (assuming it's stored there)
         self.get_ai_response = None  # This will be set when the cog is loaded
@@ -280,6 +288,55 @@ class SpeechRecognitionCog(commands.Cog):
             self.monitor_task = asyncio.create_task(self.monitor_voice_connections())
             print("✅ Voice connection monitor started")
 
+        if not self.voice_state_restored:
+            self.voice_state_restored = True
+            self.bot.loop.create_task(self._restore_saved_voice_state())
+
+    def _persist_voice_state(self, guild_id, channel_id):
+        if not self.db or not self.db.connected:
+            return
+
+        try:
+            self.db.save_voice_state(guild_id, channel_id)
+            self.saved_voice_state = {"guild_id": int(guild_id), "channel_id": int(channel_id)}
+        except Exception as e:
+            print(f"⚠️ Failed to persist voice state: {e}")
+
+    def _clear_persisted_voice_state(self):
+        if not self.db or not self.db.connected:
+            self.saved_voice_state = None
+            return
+
+        try:
+            self.db.clear_voice_state()
+        except Exception as e:
+            print(f"⚠️ Failed to clear persisted voice state: {e}")
+        finally:
+            self.saved_voice_state = None
+
+    async def _restore_saved_voice_state(self):
+        if not self.db or not self.db.connected:
+            return
+
+        try:
+            saved_state = self.db.get_saved_voice_state()
+            if not saved_state:
+                return
+
+            self.saved_voice_state = saved_state
+            await asyncio.sleep(max(Config.VOICE_REJOIN_DELAY_SECONDS, 1))
+
+            guild = self.bot.get_guild(int(saved_state["guild_id"]))
+            if not guild:
+                return
+
+            channel = guild.get_channel(int(saved_state["channel_id"]))
+            if channel and hasattr(channel, "connect"):
+                print(f"🔄 Restoring saved voice channel: {channel.name}")
+                await self._ensure_voice_connection(channel)
+        except Exception as e:
+            print(f"⚠️ Failed to restore saved voice state: {e}")
+
 
 
     
@@ -317,6 +374,7 @@ class SpeechRecognitionCog(commands.Cog):
         
         # Update our internal tracking
         self.voice_clients[ctx.guild.id] = ctx.guild.voice_client
+        self._persist_voice_state(ctx.guild.id, voice_channel.id)
         
         # Start listening
         self.listening_guilds.add(ctx.guild.id)
@@ -366,6 +424,7 @@ class SpeechRecognitionCog(commands.Cog):
                 else:
                     voice_client = await voice_channel.connect()
                 self.voice_clients[ctx.guild.id] = voice_client
+                self._persist_voice_state(ctx.guild.id, voice_channel.id)
             except Exception as e:
                 print(f"❌ Error connecting in listen command: {e}")
                 await ctx.send(f"❌ Error connecting: {e}")
@@ -458,6 +517,7 @@ class SpeechRecognitionCog(commands.Cog):
     async def leave(self, ctx):
         """Disconnect the bot from your voice channel"""
         if ctx.guild.id in self.voice_clients and self.voice_clients[ctx.guild.id].is_connected():
+            self._clear_persisted_voice_state()
             await self.voice_clients[ctx.guild.id].disconnect()
             del self.voice_clients[ctx.guild.id]
             self.listening_guilds.discard(ctx.guild.id)
@@ -481,6 +541,7 @@ class SpeechRecognitionCog(commands.Cog):
     async def stoplisten(self, ctx):
         """Stop listening for voice commands"""
         if ctx.guild.id in self.listening_guilds:
+            self._clear_persisted_voice_state()
             # Clean up resources
             self.listening_guilds.discard(ctx.guild.id)
             
@@ -512,10 +573,10 @@ class SpeechRecognitionCog(commands.Cog):
         if message.author.bot or not message.guild:
             return
             
-        # PART 1: Handle Auto TTS functionality using Firebase
+        # PART 1: Handle Auto TTS functionality using the database
         try:
             if self.db:
-                # Get auto TTS settings from Firebase
+                # Get auto TTS settings from the database
                 auto_tts_channels = self.db.get_auto_tts_channels()
                 
                 # Check if this channel is in the auto TTS list
@@ -588,38 +649,16 @@ class SpeechRecognitionCog(commands.Cog):
             elif any(pattern in cmd_lower for pattern in male_patterns):
                 gender = "m"
             
-            # Find the audio cog
-            audio_cog = None
-            for cog_name, cog in self.bot.cogs.items():
-                if "audio" in cog_name.lower():
-                    audio_cog = cog
-                    break
-            
-            if audio_cog:
-                try:
-                    # Update user voice preference in Firebase
-                    self.db.set_user_voice_preference(user_id, gender)  # type: ignore
-                    gender_name = "male" if gender == "m" else "female"
-                    
-                    # Get the guild and a text channel
-                    guild = self.bot.get_guild(guild_id)
-                    if guild:
-                        # Find a suitable text channel
-                        for channel in guild.text_channels:
-                            if channel.permissions_for(guild.me).send_messages:
-                                await channel.send(f"**VOICE CHANGED TO {gender_name.upper()}!** 👨 🔊")
-                                break
-                    
-                    # Speak a confirmation with the new voice
-                    await self.speak_message(guild_id, f"Voice changed to {gender_name}. This is how I sound now!")
-                    
-                    # Log the change
-                    print(f"✅ User {user_id} changed voice preference to {gender_name} through AI")
-                    return True
-                except Exception as e:
-                    print(f"❌ Error changing voice through cog: {e}")
-                    import traceback
-                    traceback.print_exc()
+            try:
+                self.db.set_user_voice_preference(user_id, gender)  # type: ignore
+                gender_name = "male" if gender == "m" else "female"
+                await self.speak_message(guild_id, f"Sige. {gender_name} voice na ako ngayon, gago.")
+                print(f"✅ User {user_id} changed voice preference to {gender_name} through AI")
+                return True
+            except Exception as e:
+                print(f"❌ Error changing voice through cog: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Continue with regular command processing
         # First, check if we have the AI response handler
@@ -659,7 +698,15 @@ class SpeechRecognitionCog(commands.Cog):
         # Get AI response
         try:
             print(f"🧠 Generating AI response for command: '{command}'")
-            response = await self.get_ai_response(conversation)
+            response = await self.get_ai_response(
+                conversation,
+                channel_id=guild.voice_client.channel.id if guild.voice_client and guild.voice_client.channel else None,
+                author_id=user_id,
+                author_tag=str(member),
+                voice_members=[m.display_name for m in guild.voice_client.channel.members if not m.bot]
+                if guild.voice_client and guild.voice_client.channel
+                else None,
+            )
             print(f"✅ AI response generated: '{response[:50]}...'")
             
             # No text channel logging - only speak the response
@@ -776,17 +823,17 @@ class SpeechRecognitionCog(commands.Cog):
                                 current_user_id = member.id
                                 break
             
-            # Get gender preference from Firebase, fallback to default
+            # Get gender preference from the database, fallback to default
             gender_preference = "f"  # Default to female
             
-            # Check for user preferences in Firebase
+            # Check for user preferences in the database
             if current_user_id and self.db:
                 try:
-                    # Get voice preference from Firebase
+                    # Get voice preference from the database
                     gender_preference = self.db.get_user_voice_preference(current_user_id)
                     # print(f"DEBUG: Using voice preference '{gender_preference}' for user {current_user_id}")
                 except Exception as e:
-                    print(f"⚠️ Error getting voice preference from Firebase: {e}")
+                    print(f"⚠️ Error getting voice preference from database: {e}")
                     # Fallback to default
             
             # Choose voice based on language and gender
@@ -888,6 +935,7 @@ class SpeechRecognitionCog(commands.Cog):
                     if voice_channel.guild.voice_client.is_connected():
                         # Update our local tracking just in case
                         self.voice_clients[voice_channel.guild.id] = voice_channel.guild.voice_client
+                        self._persist_voice_state(voice_channel.guild.id, voice_channel.id)
                         return voice_channel.guild.voice_client
                 
                 # If connected to wrong channel or dead connection, disconnect first
@@ -913,6 +961,7 @@ class SpeechRecognitionCog(commands.Cog):
                         voice_client = await voice_channel.connect(timeout=30.0, reconnect=True)
                     
                     self.voice_clients[voice_channel.guild.id] = voice_client
+                    self._persist_voice_state(voice_channel.guild.id, voice_channel.id)
                     
                     # Initialize TTS queue if needed
                     if voice_channel.guild.id not in self.tts_queue:
@@ -951,10 +1000,10 @@ class SpeechRecognitionCog(commands.Cog):
         """
         try:
             if not self.db:
-                await ctx.send("⚠️ **ERROR:** Firebase database connection is required for auto TTS")
+                await ctx.send("⚠️ **ERROR:** Database connection is required for auto TTS")
                 return
                 
-            # Toggle auto TTS for the channel in Firebase
+            # Toggle auto TTS for the channel in the database
             enabled = self.db.toggle_auto_tts_channel(ctx.guild.id, ctx.channel.id)
             
             # Inform the user
@@ -1055,10 +1104,9 @@ class SpeechRecognitionCog(commands.Cog):
             normalized_gender = 'm' if gender.lower() in ['m', 'male'] else 'f'
             gender_name = "male" if normalized_gender == 'm' else "female"
             
-            # Store the preference in Firebase if available
-            # Always use Firebase for voice preferences in production mode
+            # Store the preference in the database
             self.db.set_user_voice_preference(ctx.author.id, normalized_gender)  # type: ignore
-            print(f"✅ Saved voice preference to Firebase: User {ctx.author.id} preference {normalized_gender}")
+            print(f"✅ Saved voice preference to database: User {ctx.author.id} preference {normalized_gender}")
             # Connect to voice if needed
             if not ctx.author.voice:
                 await ctx.send(f"**VOICE CHANGED TO {gender_name.upper()}!** 👨 🔊\nPero wala kang voice channel, pumasok ka muna sa voice!")
@@ -1117,6 +1165,18 @@ class SpeechRecognitionCog(commands.Cog):
                                 print(f"❌ Could not find a suitable voice channel to reconnect to in guild {guild_id}")
                                 # Remove from listening guilds if we couldn't reconnect
                                 self.listening_guilds.discard(guild_id)
+
+                if self.saved_voice_state:
+                    saved_guild_id = int(self.saved_voice_state["guild_id"])
+                    saved_channel_id = int(self.saved_voice_state["channel_id"])
+                    saved_voice_client = self.voice_clients.get(saved_guild_id)
+                    if not saved_voice_client or not saved_voice_client.is_connected():
+                        guild = self.bot.get_guild(saved_guild_id)
+                        if guild:
+                            voice_channel = guild.get_channel(saved_channel_id)
+                            if voice_channel and hasattr(voice_channel, "connect"):
+                                print(f"🔄 Restoring persistent voice connection for guild {saved_guild_id}")
+                                await self._ensure_voice_connection(voice_channel)
                 
                 # Sleep for a bit to avoid constant checking
                 await asyncio.sleep(10)

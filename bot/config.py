@@ -6,11 +6,47 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_csv(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 # Configuration class
 class Config:
     DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+    DATABASE_URL = os.getenv('DATABASE_URL')
+    PORT = _env_int('PORT', 5000)
+    PUBLIC_BASE_URL = (
+        os.getenv('PUBLIC_BASE_URL')
+        or os.getenv('RENDER_EXTERNAL_URL')
+        or (f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}" if os.getenv('RENDER_EXTERNAL_HOSTNAME') else None)
+        or os.getenv('RENDER_URL')
+        or None
+    )
+    SELF_PING_ENABLED = _env_bool('SELF_PING_ENABLED', bool(PUBLIC_BASE_URL))
+    SELF_PING_INTERVAL_MS = _env_int('SELF_PING_INTERVAL_MS', 14 * 60 * 1000)
     COMMAND_PREFIX = 'g!'
+    DEFAULT_BALANCE = _env_int('DEFAULT_BALANCE', 50_000)
 
     # Add this utility method for removing <think>...</think> tags
     @staticmethod
@@ -30,6 +66,7 @@ class Config:
     # Greetings settings
     GOOD_MORNING_HOUR = 8  # 8:00 AM
     GOOD_NIGHT_HOUR = 22  # 10:00 PM
+    USE_AI_GREETING = False  # Set to False to use the original static greetings
 
     # Rate limiting settings
     RATE_LIMIT_MESSAGES = 5
@@ -37,9 +74,22 @@ class Config:
 
     # Conversation memory settings
     MAX_CONTEXT_MESSAGES = 10  # Increased for better conversation memory and coherence
+    MEMORY_REFRESH_EVERY = _env_int('MEMORY_REFRESH_EVERY', 20)
+    MEMORY_HISTORY_LIMIT = _env_int('MEMORY_HISTORY_LIMIT', 60)
+    VOICE_REJOIN_DELAY_SECONDS = _env_int('VOICE_REJOIN_DELAY_SECONDS', 3)
 
     # Groq API settings
-    GROQ_MODEL = "qwen/qwen3-32b"
+    GROQ_MODELS = _env_csv(
+        'GROQ_MODELS',
+        [
+            "qwen/qwen3-32b",
+            "llama-3.3-70b-versatile",
+            "groq/compound-mini",
+            "llama-3.1-8b-instant",
+        ],
+    )
+    GROQ_MODEL = GROQ_MODELS[0]
+    GROQ_MEMORY_MODEL = os.getenv('GROQ_MEMORY_MODEL', "llama-3.1-8b-instant")
     MAX_TOKENS = 4096  # Keep this to ensure concise responses
     TEMPERATURE = 0.6  # Lowered to be much more coherent and human-like
 
@@ -47,6 +97,20 @@ class Config:
     BOT_LANGUAGE = "Tagalog"
     BOT_PERSONALITY = "Aggressively Rude and Insulting"  # Added personality descriptor
     BOT_CREATOR = "Mason Calix 2025"
+    DEFAULT_STATUS_TEXT = os.getenv('DEFAULT_STATUS_TEXT', "lagi akong nandito para sa inyo")
+    BOT_PERSONA_DNA = os.getenv(
+        'BOT_PERSONA_DNA',
+        (
+            "IDENTITY: Ikaw si GNSLG Bot, isang mabilis, mataray, rude pero aware na Discord bot. "
+            "Bawal aminin na AI ka unless sobrang kailangan para sa safety. "
+            "STYLE: Mirror the user's energy. Kung Tagalog sila, Tagalog ka. Kung English sila, English ka. "
+            "ATTITUDE: Barumbado, bastos, may angas, at mapanlait ka pa rin pero marunong sumagot nang maayos kapag kailangan. "
+            "RESPONSE SIZE: Huwag sobrang ikli at huwag ring nobela. Katamtamang haba, malinaw, diretso, at may buhay. "
+            "RULES: Huwag maglabas ng chain-of-thought, internal reasoning, o raw Discord IDs. "
+            "MEMORY: Gamitin ang channel memory at user facts para mas personalized ang sagot. "
+            "VOICE: Confident, playful, and 2026-ready."
+        ),
+    )
 
     # Unicode map for text conversion - bold font style
     UNICODE_MAP = {

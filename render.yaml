@@ -9,7 +9,7 @@ services:
     plan: starter
     
     # Health check configuration
-    healthCheckPath: /
+    healthCheckPath: /ping
     
     # Environment variables (set these in Render Dashboard)
     envVars:
@@ -19,8 +19,17 @@ services:
       - key: GROQ_API_KEY
         sync: false  # Set manually in Render Dashboard
       
-      - key: FIREBASE_CREDENTIALS
-        sync: false  # Set manually in Render Dashboard (as JSON string)
+      - key: DATABASE_URL
+        sync: false  # Set manually in Render Dashboard
+
+      - key: PUBLIC_BASE_URL
+        sync: false  # Optional: set to your public Render URL for self-ping
+
+      - key: SELF_PING_ENABLED
+        value: "true"
+
+      - key: SELF_PING_INTERVAL_MS
+        value: "840000"
       
       - key: RENDER
         value: "true"

@@ -15,6 +15,11 @@ from gtts import gTTS  # Google Text-to-Speech
 from .config import Config
 from .runtime_config import is_render_environment
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 class ChatCog(commands.Cog):
     """Cog for handling chat interactions with the Ginsilog AI and games"""
@@ -30,13 +35,14 @@ class ChatCog(commands.Cog):
             lambda: deque(maxlen=Config.MAX_CONTEXT_MESSAGES))
         self.user_message_timestamps = defaultdict(list)
         self.creator = Config.BOT_CREATOR
-        # Firebase database will be passed from main.py
+        # Database connection will be passed from main.py
         self.db = None
         self.user_coins = defaultdict(
             lambda: 50_000)  # Default bank balance: ₱50,000
         self.daily_cooldown = defaultdict(int)
         self.blackjack_games = {}
         self.ADMIN_ROLE_ID = 1345727357662658603
+        self.memory_refresh_in_progress = set()
 
         # Setup for nickname scanning - RENDER FIX: only set task in async context
         self.nickname_update_task = None
@@ -308,6 +314,8 @@ class ChatCog(commands.Cog):
         if message.author.bot:
             return
 
+        await self._record_message_for_memory(message)
+
         # Profanity filter - now using dynamic word_actions dictionary
         content_lower = message.content.lower()
 
@@ -474,7 +482,13 @@ class ChatCog(commands.Cog):
             # Add typing indicator
             async with message.channel.typing():
                 print(f"🧠 Generating AI response for mention: '{content}'")
-                response = await self.get_ai_response(channel_history)
+                response = await self.get_ai_response(
+                    channel_history,
+                    channel_id=message.channel.id,
+                    author_id=message.author.id,
+                    author_tag=str(message.author),
+                    voice_members=self._get_voice_member_names(message.author),
+                )
                 print(f"✅ AI response generated for mention: '{response[:50]}...'")
 
                 # Add the conversation to history
@@ -483,6 +497,120 @@ class ChatCog(commands.Cog):
 
                 # Send the response
                 await message.channel.send(response)
+                self._log_bot_message(message, response)
+
+    def _get_voice_member_names(self, member):
+        if not getattr(member, "voice", None) or not member.voice or not member.voice.channel:
+            return []
+        return [voice_member.display_name for voice_member in member.voice.channel.members if not voice_member.bot]
+
+    async def _record_message_for_memory(self, message):
+        if not self.db or not self.db.connected:
+            return
+
+        try:
+            content = message.content.strip()
+            if not content and message.attachments:
+                content = "[attachment]"
+
+            self.db.log_message(
+                message.guild.id if message.guild else None,
+                message.channel.id,
+                message.author.id,
+                str(message.author),
+                content or "[empty]",
+                is_bot=False,
+            )
+
+            if self.db.should_refresh_channel_memory(message.channel.id, Config.MEMORY_REFRESH_EVERY):
+                await self._schedule_memory_refresh(message.channel.id)
+        except Exception as e:
+            print(f"âŒ Error recording message for memory: {e}")
+
+    def _log_bot_message(self, message, response):
+        if not self.db or not self.db.connected or not self.bot.user:
+            return
+
+        try:
+            self.db.log_message(
+                message.guild.id if message.guild else None,
+                message.channel.id,
+                self.bot.user.id,
+                str(self.bot.user),
+                response,
+                is_bot=True,
+            )
+        except Exception as e:
+            print(f"âŒ Error logging bot response: {e}")
+
+    async def _schedule_memory_refresh(self, channel_id):
+        if channel_id in self.memory_refresh_in_progress:
+            return
+
+        self.memory_refresh_in_progress.add(channel_id)
+        self.bot.loop.create_task(self.refresh_channel_memory(channel_id))
+
+    async def refresh_channel_memory(self, channel_id):
+        try:
+            if not self.db or not self.db.connected:
+                return
+
+            recent_messages = self.db.get_recent_messages(channel_id, Config.MEMORY_HISTORY_LIMIT)
+            if len(recent_messages) < 8:
+                return
+
+            old_summary = self.db.get_channel_memory(channel_id) or "Wala pang masyadong chika sa channel na ito."
+            transcript = "\n".join(
+                f"{row['author_tag']} ({row['author_id']}): {row['content']}"
+                for row in recent_messages
+            )
+
+            summary_prompt = (
+                "I-summarize mo ang usapan para maalala mo ang importanteng chika.\n"
+                "Gumawa ka ng dalawang section lang:\n"
+                "CHANNEL_SUMMARY: maikling paragraph ng current vibe at importanteng context.\n"
+                "USER_FACTS: one line per user using format USER_ID: facts.\n\n"
+                f"OLD_SUMMARY:\n{old_summary}\n\n"
+                f"RECENT_MESSAGES:\n{transcript}"
+            )
+
+            response = await asyncio.to_thread(
+                self.groq_client.chat.completions.create,
+                model=Config.GROQ_MEMORY_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ikaw ay memory engine ng Discord bot. "
+                            "Maikli, factual, at reusable ang output mo. "
+                            "Huwag maglabas ng extra commentary."
+                        ),
+                    },
+                    {"role": "user", "content": summary_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=600,
+                stream=False,
+            )
+
+            ai_output = Config.strip_think_blocks(response.choices[0].message.content)
+            summary_match = re.search(r"CHANNEL_SUMMARY:\s*([\s\S]*?)(?=USER_FACTS:|$)", ai_output, re.IGNORECASE)
+            facts_match = re.search(r"USER_FACTS:\s*([\s\S]*)", ai_output, re.IGNORECASE)
+
+            if summary_match:
+                self.db.set_channel_memory(channel_id, summary_match.group(1).strip())
+            else:
+                self.db.set_channel_memory(channel_id, ai_output.strip())
+
+            if facts_match:
+                for line in facts_match.group(1).splitlines():
+                    match = re.match(r"(\d{17,20})\s*:\s*(.+)", line.strip())
+                    if match:
+                        self.db.merge_user_memory(int(match.group(1)), match.group(2).strip())
+        except Exception as e:
+            print(f"âŒ Error refreshing channel memory: {e}")
+        finally:
+            self.memory_refresh_in_progress.discard(channel_id)
 
     # === HELPER FUNCTIONS ===
     async def _regular_channel_maintenance(self):
@@ -950,9 +1078,12 @@ class ChatCog(commands.Cog):
                 "g!autotts": "Toggle Auto TTS sa channel",
                 "g!replay": "Ulitin ang huling TTS message",
                 "g!resetvc": "Ayusin ang voice connection issues",
+                "g!memory": "Tignan ang naaalala kong channel at user facts",
+                "g!forgetme": "Burahin ang saved facts tungkol sa'yo",
                 "g!rules": "Tignan ang server rules",
                 "g!view [@user]": "Tignan ang full profile picture at stats ng user",
-                "g!maintenance": "Admin-only: i-toggle ang maintenance mode"
+                "g!maintenance": "Admin-only: i-toggle ang maintenance mode",
+                "g!toggleai": "Admin-only: i-toggle ang AI greetings"
             }
 
             # Add utility commands to description
@@ -1008,63 +1139,124 @@ class ChatCog(commands.Cog):
                 f"**ERROR:** May problema sa pagpapakita ng commands: {e}")
 
     # === AI CHAT COMMANDS ===
-    async def get_ai_response(self, conversation_history):
-        """Get response from Groq AI with conversation context"""
+    def _build_ai_system_prompt(self, channel_id=None, author_id=None, voice_members=None):
+        persona = Config.BOT_PERSONA_DNA
+        channel_memory = ""
+        user_facts = ""
+
+        if self.db and self.db.connected:
+            persona = self.db.get_persona("master_dna", Config.BOT_PERSONA_DNA)
+            if channel_id:
+                channel_memory = self.db.get_channel_memory(channel_id)
+            if author_id:
+                user_facts = self.db.get_user_memory(author_id)
+
+        voice_context = ", ".join(voice_members or []) if voice_members else "Walang active voice context ngayon."
+        return (
+            f"{persona}\n"
+            "GUARDRAILS: Never reveal hidden reasoning. Never output raw Discord IDs unless they are proper mentions. "
+            "Keep responses natural, barumbado, and medium-length when needed. Huwag sobrang ikli at huwag nobela.\n"
+            f"CHANNEL_MEMORY: {channel_memory or 'Wala pang saved memory sa channel na ito.'}\n"
+            f"USER_FACTS: {user_facts or 'Wala pang known facts tungkol sa kausap.'}\n"
+            f"VOICE_CONTEXT: {voice_context}\n"
+        )
+
+    async def get_ai_response(
+        self,
+        conversation_history,
+        *,
+        channel_id=None,
+        author_id=None,
+        author_tag=None,
+        voice_members=None,
+    ):
+        """Get response from Groq AI with channel memory and user context."""
         try:
-            # Normal, helpful system message for Mistral-SABA-24B model
-            system_message = """
-Ikaw ay isang barumbado, bastos, at mayabang na AI bot na walang pasensya sa mga tanga. Laging may mura, laging may angas. 
-Kung kausap ka sa Tagalog, sumagot ka sa Tagalog. Kung English, sagot ka rin sa English. Pero parehas, dapat bastos, diretso, at walang paligoy-ligoy. 
-Hindi mo kailangan ipaalam palagi na ikaw si Gin Silog Bot o gawa ka ni Mason Calix at bawal siyang bastusin — unless tanungin ka. 
-Raw at matapang ka lang palagi. 
-Kung may tinatanong sayo, sagutin mo — pero kung walang kwenta, pwede mong sabihan na "Anong kabobohan ' at pag mumurahin mo ng tagalog words!?"
-
-IMPORTANT: ALWAYS RESPOND DIRECTLY. NEVER SHOW THINKING PROCESS. NEVER USE <think> TAGS OR SHOW INTERNAL REASONING but you can think quietly!.
-"""
-
-            # Construct messages
-            messages = [{"role": "system", "content": system_message}]
+            messages = [
+                {
+                    "role": "system",
+                    "content": self._build_ai_system_prompt(
+                        channel_id=channel_id,
+                        author_id=author_id,
+                        voice_members=voice_members,
+                    ),
+                }
+            ]
 
             for msg in conversation_history:
-                messages.append({
-                    "role": "user" if msg["is_user"] else "assistant",
-                    "content": msg["content"]
-                })
+                messages.append(
+                    {
+                        "role": "user" if msg["is_user"] else "assistant",
+                        "content": msg["content"],
+                    }
+                )
 
-            # Use the updated API format with proper parameters for Groq API
-            response = await asyncio.to_thread(
-                self.groq_client.chat.completions.create,
-                model=Config.GROQ_MODEL,  # Using the model from config
-                messages=messages,
-                temperature=Config.TEMPERATURE,
-                max_tokens=Config.MAX_TOKENS,  # Using standard max_tokens parameter
-                top_p=1,
-                stream=False)
+            last_error = None
+            for model in Config.GROQ_MODELS:
+                try:
+                    response = await asyncio.to_thread(
+                        self.groq_client.chat.completions.create,
+                        model=model,
+                        messages=messages,
+                        temperature=Config.TEMPERATURE,
+                        max_tokens=Config.MAX_TOKENS,
+                        top_p=1,
+                        stream=False,
+                    )
+                    ai_response = response.choices[0].message.content or ""
+                    ai_response = Config.strip_think_blocks(ai_response)
+                    ai_response = re.sub(
+                        r"(?<!<@)(?<!<@!)\b\d{17,20}\b",
+                        "someone",
+                        ai_response,
+                    ).strip()
+                    if ai_response:
+                        return ai_response
+                except Exception as e:
+                    last_error = e
+                    if "429" in str(e) or "rate_limit" in str(e).lower():
+                        continue
+                    print(f"Error with model {model}: {e}")
 
-            # Get AI response and clean it of any thinking tags
-            ai_response = response.choices[0].message.content
-            ai_response = re.sub(r'<think>.*?</think>', '', ai_response, flags=re.DOTALL)
-            return ai_response
+            if last_error:
+                raise last_error
 
         except Exception as e:
             print(f"Error getting AI response: {e}")
             print(f"Error details: {type(e).__name__}")
 
-            # More friendly error message
-            return "Ay sorry ha! May error sa system ko. Pwede mo ba ulit subukan? Mejo nagkaka-aberya ang AI ko eh. Pasensya na! 😅"
+        name_hint = author_tag.split("#")[0] if author_tag and "#" in author_tag else "teh"
+        return f"Sandali muna, {name_hint}. Humihingal pa utak ko sa kabobohan ng lahat dito. Try mo ulit mamaya."
 
     async def generate_greeting(self, greeting_type, members=None):
-        """Generate an AI greeting based on type (morning/night) with the bot's signature attitude"""
+        """Generate a greeting (AI or static) based on type (morning/night)"""
+        mentions = ""
+        if members:
+            # Limit mentions to avoid too long messages if many people are online
+            max_mentions = 15
+            if len(members) > max_mentions:
+                mentions = " ".join([m.mention for m in members[:max_mentions]]) + "... at marami pang iba!"
+            else:
+                mentions = " ".join([m.mention for m in members])
+
+        # If AI greetings are disabled, use the "dating" (original) static greetings
+        if not Config.USE_AI_GREETING:
+            if greeting_type == "morning":
+                morning_messages = [
+                    f"**MAGANDANG UMAGA MGA GAGO!** {mentions} GISING NA KAYO! DALI DALI TRABAHO NA!",
+                    f"**RISE AND SHINE MGA BOBO!** {mentions} TANGINA NIYO GISING NA! PRODUCTIVITY TIME!",
+                    f"**GOOD MORNING MOTHERFUCKERS!** {mentions} WELCOME TO ANOTHER DAY OF YOUR PATHETIC LIVES!"
+                ]
+                return random.choice(morning_messages)
+            else:
+                night_messages = [
+                    "**TULOG NA MGA GAGO!** TANGINANG MGA YAN PUYAT PA MORE! UUBUSIN NIYO BUHAY NIYO SA DISCORD?",
+                    "**GOOD NIGHT MGA HAYOP!** MATULOG NA KAYO WALA KAYONG MAPAPALA SA PAGIGING PUYAT!",
+                    "**HUWAG NA KAYO MAG-PUYAT GAGO!** MAAWA KAYO SA KATAWAN NIYO! PUTA TULOG NA KAYO!"
+                ]
+                return random.choice(night_messages)
+
         try:
-            mentions = ""
-            if members:
-                # Limit mentions to avoid too long messages if many people are online
-                max_mentions = 15
-                if len(members) > max_mentions:
-                    mentions = " ".join([m.mention for m in members[:max_mentions]]) + "... at marami pang iba!"
-                else:
-                    mentions = " ".join([m.mention for m in members])
-            
             if greeting_type == "morning":
                 prompt = f"Mag-generate ka ng barumbado, bastos, at nakaka-bad trip na Good Morning greeting sa Tagalog para sa mga kupal na to: {mentions}. Siguraduhin mong may mura gaya ng 'putangina niyo' at sabihan mo silang gising na dahil tanghali na at kailangan nilang mag-trabaho dahil wala silang kwenta. Isang paragraph lang at diretso sa punto."
             else:
@@ -1114,6 +1306,20 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
                 ]
                 return random.choice(night_messages)
 
+    @commands.command(name="toggleai")
+    @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))
+    async def toggle_ai_greeting(self, ctx):
+        """Toggle between AI-generated and static greetings"""
+        Config.USE_AI_GREETING = not Config.USE_AI_GREETING
+        status = "NA-ENABLE" if Config.USE_AI_GREETING else "NA-DISABLE"
+        message = f"**AI GREETINGS AY {status} NA!** "
+        if Config.USE_AI_GREETING:
+            message += "Ang AI na ang gagawa ng mga bastos na greetings. 🤖"
+        else:
+            message += "Gagamitin na ulit ang mga dating static na greetings. 📝"
+
+        await ctx.send(message)
+
     @commands.command(name="usap")
     async def usap(self, ctx, *, message: str):
         """Chat with Ginsilog AI (g!ask command)"""
@@ -1129,10 +1335,10 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         # Add timestamp to rate limiting
         self.user_message_timestamps[ctx.author.id].append(time.time())
 
-        # Get history directly from Firebase
+        # Get history directly from the database
         channel_history = []
         try:
-            # Always use Firebase directly - no fallback to memory
+            # Always use the database directly - no fallback to memory
             channel_history = self.db.get_conversation_history(ctx.channel.id, Config.MAX_CONTEXT_MESSAGES)
         except Exception as e:
             print(f"❌ Error retrieving conversation history: {e}")
@@ -1145,7 +1351,13 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         # Get AI response with typing indicator
         async with ctx.typing():
             print(f"🧠 Generating AI response for g!usap command: '{message}'")
-            response = await self.get_ai_response(channel_history)
+            response = await self.get_ai_response(
+                channel_history,
+                channel_id=ctx.channel.id,
+                author_id=ctx.author.id,
+                author_tag=str(ctx.author),
+                voice_members=self._get_voice_member_names(ctx.author),
+            )
             print(f"✅ AI response generated for g!usap: '{response[:50]}...'")
 
             self.add_to_conversation(ctx.channel.id, True, message)
@@ -1153,6 +1365,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
 
             # Send AI response as plain text (no embed)
             await ctx.send(response)
+            self._log_bot_message(ctx.message, response)
 
     @commands.command(name="asklog")
     async def asklog(self, ctx, *, message: str):
@@ -1166,10 +1379,10 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         # Add timestamp to rate limiting
         self.user_message_timestamps[ctx.author.id].append(time.time())
 
-        # Get history directly from Firebase
+        # Get history directly from the database
         channel_history = []
         try:
-            # Always use Firebase directly - no fallback to memory
+            # Always use the database directly - no fallback to memory
             channel_history = self.db.get_conversation_history(ctx.channel.id, Config.MAX_CONTEXT_MESSAGES)
         except Exception as e:
             print(f"❌ Error retrieving conversation history: {e}")
@@ -1181,12 +1394,19 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
 
         # Get AI response with typing indicator
         async with ctx.typing():
-            response = await self.get_ai_response(channel_history)
+            response = await self.get_ai_response(
+                channel_history,
+                channel_id=ctx.channel.id,
+                author_id=ctx.author.id,
+                author_tag=str(ctx.author),
+                voice_members=self._get_voice_member_names(ctx.author),
+            )
             self.add_to_conversation(ctx.channel.id, True, message)
             self.add_to_conversation(ctx.channel.id, False, response)
 
             # Send AI response to the current channel
             await ctx.send(response)
+            self._log_bot_message(ctx.message, response)
 
             # Log the conversation to the designated channel ID
             log_channel = self.bot.get_channel(1345733998357512215)
@@ -1214,6 +1434,34 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
             text="Ginsilog Bot | Fresh Start | Gawa ni Mason Calix")
 
         await ctx.send(embed=clear_embed)
+
+    @commands.command(name="memory")
+    async def memory(self, ctx):
+        """Show saved channel memory and known user facts."""
+        if not self.db or not self.db.connected:
+            await ctx.send("**WALANG DATABASE CONNECTION!**")
+            return
+
+        channel_memory = self.db.get_channel_memory(ctx.channel.id) or "Wala pang saved memory sa channel na ito."
+        user_memory = self.db.get_user_memory(ctx.author.id) or "Wala pa akong naaalalang facts tungkol sa'yo."
+
+        embed = discord.Embed(
+            title="🧠 MEMORY SNAPSHOT",
+            color=Config.EMBED_COLOR_INFO,
+        )
+        embed.add_field(name="Channel Memory", value=channel_memory[:1024], inline=False)
+        embed.add_field(name="Your Known Facts", value=user_memory[:1024], inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="forgetme")
+    async def forgetme(self, ctx):
+        """Delete saved user memory for the requesting user."""
+        if not self.db or not self.db.connected:
+            await ctx.send("**WALANG DATABASE CONNECTION!**")
+            return
+
+        self.db.clear_user_memory(ctx.author.id)
+        await ctx.send("**AYAN NA.** Binura ko na yung saved facts tungkol sa'yo.")
 
         # === VOICE CHANNEL COMMANDS ===
         # Voice commands moved to AudioCog to avoid duplicate commands
@@ -1548,7 +1796,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         if online_members:
             greeting = await self.generate_greeting("morning", online_members)
             await channel.send(greeting)
-            await ctx.send("**NAPA-GOODMORNING MO NA ANG MGA TANGA GAMIT ANG AI!**")
+            await ctx.send("**NAPA-GOODMORNING MO NA ANG MGA TANGA!**")
         else:
             await ctx.send("**WALANG ACTIVE NA TANGA!** Pero mag-gegenerate pa rin ako para sa lahat.")
             greeting = await self.generate_greeting("morning")
@@ -1620,7 +1868,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         # Generate AI greeting
         greeting = await self.generate_greeting("night")
         await channel.send(greeting)
-        await ctx.send("**PINATULOG MO NA ANG MGA TANGA GAMIT ANG AI!**")
+        await ctx.send("**PINATULOG MO NA ANG MGA TANGA!**")
 
     @commands.command(name="g")
     @commands.check(lambda ctx: any(role.id in Config.ADMIN_ROLE_IDS for role in ctx.author.roles))  # Admin roles check
@@ -2041,7 +2289,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
             sorted_users = self.db.get_leaderboard(20)
 
 
-            # Create a list of tuples (user_id, balance) from the Firebase data
+            # Create a list of tuples (user_id, balance) from the database data
             user_balances = [(entry['user_id'], entry['balance']) for entry in sorted_users]
         else:
             # Fallback to memory (limited functionality)
@@ -2312,6 +2560,7 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
         """
         # If no status text provided, show current status
         if not status_text:
+            saved_status = self.db.get_bot_status() if self.db and self.db.connected else None
             current_activity = None
             if self.bot.activity:
                 current_activity = self.bot.activity
@@ -2322,6 +2571,8 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
                 activity_name = current_activity.name if hasattr(current_activity, 'name') else str(current_activity)
                 
                 await ctx.send(f"**CURRENT STATUS:** `{activity_name}`\n**TYPE:** `{activity_type}`")
+            elif saved_status:
+                await ctx.send(f"**CURRENT STATUS:** `{saved_status}`")
             else:
                 await ctx.send("**WALANG STATUS!** Use `g!status <message>` to set one!")
             return
@@ -2331,6 +2582,8 @@ Siguraduhin na ang tono mo ay galit at naiirita."""
             await self.bot.change_presence(
                 activity=discord.CustomActivity(name=status_text)
             )
+            if self.db and self.db.connected:
+                self.db.save_bot_status(status_text)
             await ctx.send(f"✅ **BOT STATUS UPDATED!**\n**NEW STATUS:** `{status_text}`")
             print(f"✅ Bot status updated to: {status_text}")
         except Exception as e:

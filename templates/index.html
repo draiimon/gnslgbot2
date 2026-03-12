@@ -3,193 +3,257 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GNSLG Bot - Status</title>
+    <title>GNSLG Runtime</title>
     <style>
+        :root {
+            --bg: #08131c;
+            --panel: rgba(10, 24, 34, 0.82);
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --text: #f3f7fb;
+            --muted: #97aaba;
+            --hot: #ff6b57;
+            --lime: #8ff5a6;
+            --cyan: #5de3ff;
+            --amber: #ffc65c;
+            --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+        }
+
         * {
-            margin: 0;
-            padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
             min-height: 100vh;
-            display: flex;
-            justify-content: center;
+            font-family: "Trebuchet MS", "Lucida Sans Unicode", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(255, 107, 87, 0.28), transparent 30%),
+                radial-gradient(circle at bottom right, rgba(93, 227, 255, 0.18), transparent 28%),
+                linear-gradient(145deg, #041018 0%, #08131c 48%, #101d28 100%);
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        .shell {
+            width: min(980px, 100%);
+            background: var(--panel);
+            border: 1px solid var(--panel-border);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(18px);
+            overflow: hidden;
+        }
+
+        .hero {
+            padding: 36px 36px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            background:
+                linear-gradient(120deg, rgba(255, 107, 87, 0.12), transparent 35%),
+                linear-gradient(240deg, rgba(93, 227, 255, 0.1), transparent 40%);
+        }
+
+        .eyebrow {
+            display: inline-flex;
             align-items: center;
-            padding: 20px;
-        }
-        
-        .container {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 500px;
-            width: 100%;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            text-align: center;
-        }
-        
-        .status-icon {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 50%;
-            margin: 0 auto 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            animation: pulse 2s infinite;
-        }
-        
-        .status-icon::before {
-            content: "✓";
-            color: white;
-            font-size: 40px;
-            font-weight: bold;
-        }
-        
-        @keyframes pulse {
-            0%, 100% {
-                transform: scale(1);
-                box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7);
-            }
-            50% {
-                transform: scale(1.05);
-                box-shadow: 0 0 0 20px rgba(102, 126, 234, 0);
-            }
-        }
-        
-        h1 {
-            color: #333;
-            font-size: 32px;
-            margin-bottom: 10px;
+            gap: 10px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: rgba(143, 245, 166, 0.12);
+            color: var(--lime);
+            font-size: 0.88rem;
             font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
-        
-        .status-message {
-            color: #28a745;
-            font-size: 24px;
-            font-weight: 600;
-            margin-bottom: 30px;
+
+        h1 {
+            margin: 18px 0 10px;
+            font-size: clamp(2.4rem, 6vw, 4.4rem);
+            line-height: 0.95;
         }
-        
-        .info-box {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            text-align: left;
+
+        .lead {
+            max-width: 720px;
+            margin: 0;
+            color: var(--muted);
+            font-size: 1.05rem;
+            line-height: 1.6;
         }
-        
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 10px 0;
-            border-bottom: 1px solid #e0e0e0;
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            padding: 24px 36px 36px;
         }
-        
-        .info-item:last-child {
-            border-bottom: none;
-        }
-        
-        .info-label {
-            color: #666;
-            font-weight: 500;
-        }
-        
-        .info-value {
-            color: #333;
-            font-weight: 600;
-        }
-        
-        .badge {
-            display: inline-block;
-            padding: 5px 15px;
+
+        .card {
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            margin: 5px;
+            padding: 18px 18px 20px;
+            background: rgba(255, 255, 255, 0.03);
         }
-        
-        .badge-success {
-            background: #28a745;
-            color: white;
+
+        .card h2 {
+            margin: 0 0 14px;
+            font-size: 0.88rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
         }
-        
-        .badge-info {
-            background: #17a2b8;
-            color: white;
+
+        .metric {
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 8px;
         }
-        
-        .features {
-            margin-top: 20px;
+
+        .meta {
+            color: var(--muted);
+            font-size: 0.95rem;
+            line-height: 1.5;
         }
-        
-        .features h3 {
-            color: #333;
-            font-size: 18px;
-            margin-bottom: 15px;
+
+        .stack {
+            display: grid;
+            gap: 10px;
         }
-        
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 999px;
+            padding: 7px 12px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            width: fit-content;
+        }
+
+        .pill.ok {
+            background: rgba(143, 245, 166, 0.12);
+            color: var(--lime);
+        }
+
+        .pill.warn {
+            background: rgba(255, 198, 92, 0.12);
+            color: var(--amber);
+        }
+
+        .pill.hot {
+            background: rgba(255, 107, 87, 0.12);
+            color: var(--hot);
+        }
+
+        code {
+            color: var(--cyan);
+            font-family: "Consolas", "Courier New", monospace;
+            word-break: break-word;
+        }
+
         .footer {
-            margin-top: 30px;
-            color: #666;
-            font-size: 14px;
+            padding: 0 36px 32px;
+            color: var(--muted);
+            font-size: 0.92rem;
         }
-        
+
         .footer a {
-            color: #667eea;
+            color: var(--cyan);
             text-decoration: none;
-            font-weight: 600;
         }
-        
-        .footer a:hover {
-            text-decoration: underline;
+
+        @media (max-width: 640px) {
+            .hero {
+                padding: 28px 22px 18px;
+            }
+
+            .grid {
+                padding: 18px 22px 24px;
+            }
+
+            .footer {
+                padding: 0 22px 24px;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="status-icon"></div>
-        
-        <h1>GNSLG Bot</h1>
-        <div class="status-message">✅ Bot is Running!</div>
-        
-        <div class="info-box">
-            <div class="info-item">
-                <span class="info-label">Status</span>
-                <span class="info-value" style="color: #28a745;">Online</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Commands</span>
-                <span class="info-value">37 Available</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">Platform</span>
-                <span class="info-value">Discord</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">AI Model</span>
-                <span class="info-value">DeepSeek R1</span>
-            </div>
-        </div>
-        
-        <div class="features">
-            <h3>Features</h3>
-            <span class="badge badge-success">Voice Chat</span>
-            <span class="badge badge-success">AI Responses</span>
-            <span class="badge badge-success">Text-to-Speech</span>
-            <span class="badge badge-info">Gaming</span>
-            <span class="badge badge-info">Admin Tools</span>
-            <span class="badge badge-info">Tagalog Support</span>
-        </div>
-        
+    <main class="shell">
+        <section class="hero">
+            <div class="eyebrow">{{ "Discord connected" if discord_ready else "Discord booting" }}</div>
+            <h1>GNSLG Bot 2026 Runtime</h1>
+            <p class="lead">
+                Neon/Postgres-backed, memory-aware, and keepalive-ready.
+                This page stays live for Render health checks and quick diagnostics.
+            </p>
+        </section>
+
+        <section class="grid">
+            <article class="card">
+                <h2>Discord</h2>
+                <div class="metric">{{ snapshot.discord.guilds }}</div>
+                <div class="meta">Guilds connected</div>
+                <div class="stack" style="margin-top: 14px;">
+                    <span class="pill {{ 'ok' if discord_ready else 'warn' }}">
+                        {{ "Ready" if discord_ready else "Starting" }}
+                    </span>
+                    <div class="meta">Latency: {{ snapshot.discord.latency_ms if snapshot.discord.latency_ms is not none else "..." }} ms</div>
+                </div>
+            </article>
+
+            <article class="card">
+                <h2>Commands</h2>
+                <div class="metric">{{ snapshot.discord.commands }}</div>
+                <div class="meta">Registered commands</div>
+                <div class="stack" style="margin-top: 14px;">
+                    <div class="meta">Voice connections: {{ snapshot.discord.voice_connections }}</div>
+                    <div class="meta">Maintenance mode: {{ "ON" if snapshot.runtime.maintenance_mode else "OFF" }}</div>
+                </div>
+            </article>
+
+            <article class="card">
+                <h2>Database</h2>
+                <div class="metric">{{ "Neon" if db_ready else "Down" }}</div>
+                <div class="meta">Provider: PostgreSQL</div>
+                <div class="stack" style="margin-top: 14px;">
+                    <span class="pill {{ 'ok' if db_ready else 'hot' }}">
+                        {{ "Connected" if db_ready else "Unavailable" }}
+                    </span>
+                </div>
+            </article>
+
+            <article class="card">
+                <h2>Keepalive</h2>
+                <div class="metric">{{ snapshot.uptime_seconds }}</div>
+                <div class="meta">Uptime seconds</div>
+                <div class="stack" style="margin-top: 14px;">
+                    <span class="pill {{ 'ok' if snapshot.keepalive.enabled else 'warn' }}">
+                        {{ "Enabled" if snapshot.keepalive.enabled else "Optional" }}
+                    </span>
+                    <div class="meta">Target: <code>{{ snapshot.keepalive.target or "/ping" }}</code></div>
+                </div>
+            </article>
+
+            <article class="card" style="grid-column: 1 / -1;">
+                <h2>Endpoints</h2>
+                <div class="stack">
+                    <div class="meta"><code>/health</code> full runtime snapshot</div>
+                    <div class="meta"><code>/ready</code> Discord readiness check</div>
+                    <div class="meta"><code>/ping</code> lightweight uptime probe</div>
+                    <div class="meta">Saved voice state: <code>{{ snapshot.runtime.saved_voice_state or "none" }}</code></div>
+                </div>
+            </article>
+        </section>
+
         <div class="footer">
-            <p>Powered by Groq API & Firebase</p>
-            <p>Ready for deployment to Render 🚀</p>
+            Snapshot generated at <code>{{ snapshot.timestamp }}</code>.
+            {% if public_base_url %}
+            Public base URL: <code>{{ public_base_url }}</code>
+            {% endif %}
         </div>
-    </div>
+    </main>
 </body>
 </html>
